@@ -1,0 +1,26 @@
+{
+  "skill": "frontend-ui-ux-overhaul",
+  "role": "repository-wide frontend, UI, UX, accessibility, responsiveness, motion and design-system overhaul",
+  "rules": [
+    "Authority order: explicit user instruction > repository AGENTS/CLAUDE > accepted product requirements > canonical design system and component contracts > DESIGN.md > existing product identity > this skill > specialist skills > generic conventions.",
+    "No unrequested redesign; prefer existing design-system components and primitives; no decorative borders for ordinary separation; visible keyboard focus; no hover-scale on buttons; respect prefers-reduced-motion.",
+    "Planners and reviewers are advisory and read-only; the main session implements every change and runs every check."
+  ],
+  "plan_kinds": {
+    "plan": "Frontend architecture and implementation plan for the overhaul: which surfaces and root causes to fix, component and design-system reuse (shared source first, then consumers), file ownership for any parallel partition, responsive/mobile, accessibility and motion work, what to leave alone, rendered and repository verification per change, and rollback points.",
+    "architecture": "Deeper frontend architecture analysis of one significant or high-risk change (shared design-system primitive, navigation/layout shell, checkout/auth UI, animation system, cross-repository contract): safest route, alternatives rejected, blast radius on consumers, verification and recovery."
+  },
+  "review_kinds": {
+    "code": {
+      "focus": "Code correctness, architecture, maintainability and component reuse: logic and state bugs, broken props/callers, duplicated or hand-rolled primitives where the design system has one, functional regressions and interaction failures, framework misuse, compliance with repository instructions and the accepted requirements in the context, and adequacy of the recorded checks."
+    },
+    "ui-ux": {
+      "rendered_evidence": "required",
+      "focus": "UI/UX quality and design-system consistency, responsiveness and mobile usability (touch targets, safe areas, overflow, wrapping, sticky/fixed collisions, breakpoints), visual defects and interaction states, judged from the code and the rendered evidence manifest (screenshots, viewports, flows). If the manifest says no rendered evidence exists, report that visual verification did not happen as an Important finding unless the change has no rendered effect."
+    },
+    "accessibility": {
+      "rendered_evidence": "required",
+      "focus": "Accessibility and motion: semantic HTML, accessible names, keyboard access and focus order, visible focus, dialogs/forms/errors, contrast, target sizes, screen-reader semantics, prefers-reduced-motion behavior, and animation performance (layout thrashing, expensive filters, main-thread animation, will-change misuse), judged from the code and the rendered/keyboard evidence."
+    }
+  }
+}

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Dependency Upgrade"
+  short_description: "Autonomous, safe end-to-end dependency upgrade with migrations"
+policy:
+  allow_implicit_invocation: false

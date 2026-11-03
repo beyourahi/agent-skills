@@ -1,0 +1,23 @@
+{
+  "skill": "consolidate",
+  "role": "reconcile every piece of unfinished Git work (branches, worktrees, clones, stashes, uncommitted changes, PRs) into main, then clean up",
+  "rules": [
+    "Mandatory user approval after the audit, user answers on uncertain items, and explicit authorization of every discarded item are never bypassed or implied by a plan or review.",
+    "Nothing is deleted, dropped, closed or removed before integration, verification, the required reviews and the user's authorization all pass.",
+    "Conflicts resolve in favor of main's current design without losing still-needed behavior.",
+    "Planners and reviewers are advisory and read-only; the main session performs every merge, commit, push and cleanup."
+  ],
+  "plan_kinds": {
+    "plan": "Reconciliation plan from the audit: check each item's classification (already in main / obsolete / still-needed) against the evidence; for still-needed items choose merge, cherry-pick or hand port and the order (dependencies, shared files, likely conflicts); how to preserve uncommitted work first; the build/test commands; what must be shown to the user for approval or asked as uncertain; and the cleanup list with what authorization each discard needs. Flag anything that could lose work.",
+    "architecture": "Deeper analysis of one high-risk reconciliation item (diverged design, large conflict, data/schema, auth, deploy config): the safest integration route, alternatives rejected, conflict strategy that keeps main's design, verification and recovery."
+  },
+  "review_kinds": {
+    "reconciliation": {
+      "evidence": "git-inventory",
+      "focus": "Completeness and correctness of the consolidation before destructive cleanup. Using the helper-collected Git inventory (authoritative) and the context ledger (author claims to verify): every branch, worktree, clone, stash, uncommitted or untracked change and open PR is either fully in main (no unique patches, or its still-needed changes are present in the code diff) or explicitly authorized for discard by the user in the ledger; no missing, overwritten or silently discarded change; merge/cherry-pick conflict resolutions keep both main's design and the still-needed behavior; the cleanup list deletes only verified-in-main or user-authorized items; extra clones are deleted only with explicit user approval. Missing evidence for any resource is an Important finding."
+    },
+    "code": {
+      "focus": "Code correctness of the integrated changes in main (base = main before consolidation): broken callers, bad conflict resolution, duplicated or half-ported changes, regressions, test adequacy and the recorded build/test results in the context."
+    }
+  }
+}
