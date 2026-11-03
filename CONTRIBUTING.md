@@ -51,4 +51,4 @@ tests use fixtures and temporary directories only, and never call a real model, 
 
 ## License
 
-Contributions are accepted under the [MIT License](./LICENSE).
+The repository and the skills it contains are released under the [MIT License](./LICENSE).

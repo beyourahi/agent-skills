@@ -11,7 +11,7 @@ workflow repository, not a supported product.
 
 | Skill                                                         | What it does                                                                                                                               |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`consolidate`](skills/consolidate/)                          | Gets every unfinished branch, worktree, clone, stash and PR into `main`, verifies the result, then removes the rest.                        |
+| [`consolidate`](skills/consolidate/)                          | Gets every unfinished branch, worktree, clone, stash and PR into `main`, verifies the result, then removes the rest once you approve.       |
 | [`dependency-upgrade`](skills/dependency-upgrade/)            | Upgrades a repository's dependencies end to end in an isolated worktree: research, plan, migrate, test, review, verify, deliver.            |
 | [`frontend-ui-ux-overhaul`](skills/frontend-ui-ux-overhaul/)  | Audits and implements repository-wide frontend, responsive, accessibility, motion and design-system improvements.                            |
 | [`sync-agent-instructions`](skills/sync-agent-instructions/)  | Rewrites a repository's `AGENTS.md` from past sessions, git history and the code, keeping `CLAUDE.md` as an `@AGENTS.md` import.             |
@@ -28,9 +28,8 @@ skills/
 
 `consolidate` and `frontend-ui-ux-overhaul` delegate their planning and review tasks to
 `dependency-upgrade/scripts/routed_task.py` and read their prompt profiles from their own
-`routing.json`. Keep the four folders as siblings under one skills root; the shared router
-resolves `../<skill>/routing.json` from its own location, so splitting or renaming them breaks
-routing.
+`routing.json`. The router resolves each profile as `<skills-root>/<skill>/routing.json`, so keep
+the four folders as siblings under one skills root; splitting or renaming them breaks routing.
 
 ## Install
 
@@ -42,13 +41,12 @@ git clone https://github.com/beyourahi/agent-skills.git
 cp -R agent-skills/skills/* ~/.agents/skills/
 ```
 
-Claude Code reads only `~/.claude/skills`, so link each skill there once (skip any that already
-exist):
+Claude Code reads only `~/.claude/skills`, so link each skill there once:
 
 ```sh
 cd ~/.claude/skills
 for s in consolidate dependency-upgrade frontend-ui-ux-overhaul sync-agent-instructions; do
-  ln -s ../../.agents/skills/$s $s
+  [ -e "$s" ] || ln -s ../../.agents/skills/$s $s
 done
 ```
 
