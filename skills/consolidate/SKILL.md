@@ -1,6 +1,7 @@
 ---
 name: consolidate
 description: Get all unfinished work from every branch, worktree, clone, stash and PR into main, then delete everything else. Use when the user says "consolidate".
+license: MIT
 ---
 
 Consolidate and clean up this repo: get every piece of unfinished work into main, then delete all other branches and worktrees. No backups. The verification below is the safety net, so be thorough.

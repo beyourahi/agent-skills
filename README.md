@@ -21,7 +21,7 @@ workflow repository, not a supported product.
 ```text
 skills/
 ├── consolidate/               SKILL.md, routing.json
-├── dependency-upgrade/        SKILL.md, scripts/, references/, tests/, admin/
+├── dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
 ├── frontend-ui-ux-overhaul/   SKILL.md, routing.json
 └── sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```

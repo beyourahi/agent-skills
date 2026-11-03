@@ -1,6 +1,7 @@
 ---
 name: frontend-ui-ux-overhaul
 description: Comprehensive repository-wide frontend, UI, UX, interaction, accessibility, responsiveness, motion, design-system, and visual-quality audit plus implementation workflow.
+license: MIT
 ---
 
 # Frontend UI/UX overhaul

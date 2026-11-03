@@ -7,7 +7,7 @@ __pycache__/
 .pytest_cache/
 
 # graft's local graph cache — regenerable, not committed.
-graft/.cache/
+**/graft/.cache/
 
 # Local environment and secrets
 .env
@@ -16,5 +16,5 @@ graft/.cache/
 .dev.vars
 
 # Local skill run state (normally kept outside the repository)
-.local-state/
+**/.local-state/
 *.log
