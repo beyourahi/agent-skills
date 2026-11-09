@@ -1,7 +1,7 @@
 ---
 name: dependency-upgrade
 description: Autonomously upgrades a repository's dependencies end to end from one invocation - analyzes, researches compatibility, plans, upgrades in an isolated worktree from the latest upstream default branch, performs required code and config migrations, tests, reviews, fixes, verifies and delivers per the repository's delivery mode, with checkpoints, rollback and evidence. Modes upgrade (default, full pipeline), plan (read-only), verify, resume, rollback, status. Invoke explicitly by name; a casual mention of dependencies is not a request to upgrade.
-license: MIT
+license: Proprietary (personal use)
 compatibility: Needs git and Python 3.9+. JS/TS (npm, pnpm, yarn, bun) fully supported; Cargo, Go and uv adapters; other ecosystems advisory guidance. Network needed for registry, changelog research and delivery.
 disable-model-invocation: true
 argument-hint: "[upgrade|plan|verify|resume|rollback|status] [scope...]"
@@ -179,7 +179,7 @@ using the step IDs below, so `status`/`resume` read the same in every harness.
 10. `verify`: full gate from [references/verification.md](references/verification.md),
     compared with the baseline.
 11. `review`: every review task runs through the review router on exactly one model, chosen by
-    priority with usage-aware fallback (Opus 5.5 medium/Claude Code → GPT-6.1 Sol high/Codex →
+    priority with usage-aware fallback (Opus 5.5 medium/Claude Code →
     DeepSeek V4.1 Flash 1017 high/OpenCode Go (`deepseek-v4.1-flash`) → this session's model/effort):
     `depup.py review run <run_ref> --kind critical` reviews the complete code diff and lockfile diff;
     each high-risk item adds separate `--kind independent --subject <risk> --required` and

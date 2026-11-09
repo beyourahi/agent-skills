@@ -2,8 +2,8 @@
 """Routed architecture/planning and independent-review tasks for other skills (standard library only).
 
 The one shared routing implementation is ``review_router.Router`` (dependency-upgrade): same fixed
-priority (Opus 5.5 medium / Claude Code -> GPT-6.1 Sol high / Codex -> DeepSeek V4.1 Flash 1017 high /
-OpenCode Go -> the invoking session), probes, usage-aware fallback, bounded retries, isolation and
+priority (Opus 5.5 medium / Claude Code -> DeepSeek V4.1 Flash 1017 high / OpenCode Go -> the invoking
+session), probes, usage-aware fallback, bounded retries, isolation and
 recursion guard. This CLI only adds what a skill without a depup run journal needs: a run directory,
 a skill profile (``<skills>/<skill>/routing.json``: prompt focus per task kind), candidate binding to
 the working tree, reuse, required-review gating and session handoffs. Helpers are reused from depup.py.
@@ -677,7 +677,7 @@ def build_parser():
     sub = parser.add_subparsers(dest='command')
 
     def session(p):
-        p.add_argument('--session-harness', help='this session\'s harness (claude-code, codex, opencode, pi, ...)')
+        p.add_argument('--session-harness', help='this session\'s harness (claude-code, opencode, pi, ...)')
         p.add_argument('--session-model', help='this session\'s exact model id')
         p.add_argument('--session-effort', help='this session\'s effort')
         p.add_argument('--timeout', type=int, default=1800)

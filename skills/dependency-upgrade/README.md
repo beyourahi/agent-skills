@@ -50,7 +50,7 @@ Run state (journals, owned worktrees, logs, reports) lives outside repositories 
 ## Reviews, architecture and planning
 
 Every review task runs on one model in a fresh read-only session, by priority with usage-aware
-fallback: Claude Opus 5.5 medium (Claude Code) → GPT-6.1 Sol high (Codex) → DeepSeek V4.1 Flash
+fallback: Claude Opus 5.5 medium (Claude Code) → DeepSeek V4.1 Flash
 1017 high (OpenCode Go) → the invoking session's model and effort. Same order from every harness;
 no substitution, no global setting changes. `depup.py review probe` shows availability without
 model calls. Architecture and planning (`depup.py planning run`) use the same router, priority

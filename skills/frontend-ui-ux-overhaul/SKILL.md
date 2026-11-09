@@ -1,7 +1,6 @@
 ---
 name: frontend-ui-ux-overhaul
 description: Comprehensive repository-wide frontend, UI, UX, interaction, accessibility, responsiveness, motion, design-system, and visual-quality audit plus implementation workflow.
-license: MIT
 ---
 
 # Frontend UI/UX overhaul
@@ -140,14 +139,14 @@ Do not load every specialist at once. Load specialists sequentially by phase and
 
 ## Parallel work
 
-Parallelize only when the overhaul is large and ownership is non-overlapping. Valid partitions include marketing, dashboard/app, mobile/responsive, accessibility, motion, and the shared design system. Assign one owner per shared file/component; send cross-cutting findings to the appropriate owner. Every delegated prompt must state exact scope, constraints, verification, preservation of unrelated work, unchanged provider/model/thinking-effort routing, and the current registered delivery policy from `~/AGENTS.md` and the orchestration owner. Use repository-owned risk/blast-radius-based validation and the routed independent reviews of step 17; No-Mistakes is permanently retired. Use Codex-backed agents only for parallel implementation workers unless the current user explicitly authorizes an exception; planning and review tasks always go through the shared router. Jev is optional: use it only if it is installed, working, relevant, and concretely useful; never block on it.
+Parallelize only when the overhaul is large and ownership is non-overlapping. Valid partitions include marketing, dashboard/app, mobile/responsive, accessibility, motion, and the shared design system. Assign one owner per shared file/component; send cross-cutting findings to the appropriate owner. Every delegated prompt must state exact scope, constraints, verification, preservation of unrelated work, unchanged provider/model/thinking-effort routing, and the current registered delivery policy from `~/AGENTS.md` and the orchestration owner. Use repository-owned risk/blast-radius-based validation and the routed independent reviews of step 17; No-Mistakes is permanently retired. Parallel implementation workers follow the execution protocol's implementation routing (never Codex or GPT) unless the current user explicitly authorizes an exception; planning and review tasks always go through the shared router. Jev is optional: use it only if it is installed, working, relevant, and concretely useful; never block on it.
 
 ## Routed planning and review
 
 Shared with `dependency-upgrade` (one implementation). `R=~/.agents/skills/dependency-upgrade/scripts/routed_task.py`:
 
 - Before the first edit: `python3 $R start --skill frontend-ui-ux-overhaul --repo .` → `run_dir` (records HEAD as the review base); then `python3 $R plan <run_dir> --context <handoff> [--kind architecture --subject S]`, `python3 $R review <run_dir> --kind code|ui-ux|accessibility --required ...`, `python3 $R gate <run_dir>`. Always pass `--session-harness`, `--session-model`, `--session-effort` with this session's exact values. Run tasks one at a time as background commands (up to 30 min each) and wait for the JSON.
-- Each task runs on exactly one model in a fresh read-only session outside the repo, by fixed priority with usage-aware fallback: Claude Opus 5.5 medium (Claude Code) → GPT-6.1 Sol high (Codex CLI) → DeepSeek V4.1 Flash 1017 high (OpenCode Go `opencode-go/deepseek-v4.1-flash`) → this session's own model/effort/harness. Unknown quota is attempted, not skipped; exhausted, unauthenticated, unsupported or failing routes fall back automatically; nothing is substituted and no global setting changes. `python3 $R probe` shows availability without model calls.
+- Each task runs on exactly one model in a fresh read-only session outside the repo, by fixed priority with usage-aware fallback: Claude Opus 5.5 medium (Claude Code) → DeepSeek V4.1 Flash 1017 high (OpenCode Go `opencode-go/deepseek-v4.1-flash`) → this session's own model/effort/harness. Unknown quota is attempted, not skipped; exhausted, unauthenticated, unsupported or failing routes fall back automatically; nothing is substituted and no global setting changes. `python3 $R probe` shows availability without model calls.
 - `handoff` (harness without a CLI adapter): run the printed prompt in a fresh read-only native subagent, then `python3 $R record`. The implementing session never satisfies a required review itself.
 - Implementation, debugging, fixes and verification stay with this session's model, effort and harness. Report the selected models, fallbacks with reasons, verdicts and the gate result.
 

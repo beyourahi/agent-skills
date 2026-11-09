@@ -1,7 +1,6 @@
 ---
 name: consolidate
 description: Get all unfinished work from every branch, worktree, clone, stash and PR into main, then delete everything else. Use when the user says "consolidate".
-license: MIT
 ---
 
 Consolidate and clean up this repo: get every piece of unfinished work into main, then delete all other branches and worktrees. No backups. The verification below is the safety net, so be thorough.
@@ -40,7 +39,7 @@ If a required review cannot run (all routes `unavailable`, or a `handoff` you ca
 
 ROUTING (shared with dependency-upgrade; one implementation): `R=~/.agents/skills/dependency-upgrade/scripts/routed_task.py`
 - `start` (STEP 1) → `run_dir`. Then `python3 $R plan <run_dir> --context <handoff>` / `python3 $R review <run_dir> --kind <k> ...` / `python3 $R gate <run_dir>`. Always pass `--session-harness`, `--session-model`, `--session-effort` with this session's exact values. Run tasks one at a time as background commands (a task can take up to 30 min) and wait for the JSON.
-- Each task runs on exactly one model, in a fresh read-only session outside the repo, by fixed priority with usage-aware fallback: Claude Opus 5.5 medium (Claude Code) → GPT-6.1 Sol high (Codex CLI) → DeepSeek V4.1 Flash 1017 high (OpenCode Go `opencode-go/deepseek-v4.1-flash`) → this session's own model/effort/harness. Unknown quota is attempted, not skipped; exhausted, unauthenticated, unsupported or failing routes fall back automatically; nothing is substituted, and global models, accounts and credentials are never changed. `python3 $R probe` shows availability without model calls.
+- Each task runs on exactly one model, in a fresh read-only session outside the repo, by fixed priority with usage-aware fallback: Claude Opus 5.5 medium (Claude Code) → DeepSeek V4.1 Flash 1017 high (OpenCode Go `opencode-go/deepseek-v4.1-flash`) → this session's own model/effort/harness. Unknown quota is attempted, not skipped; exhausted, unauthenticated, unsupported or failing routes fall back automatically; nothing is substituted, and global models, accounts and credentials are never changed. `python3 $R probe` shows availability without model calls.
 - `reused` means the same candidate was already reviewed/planned: don't repeat it. `handoff` (harness without a CLI adapter): run the printed prompt in a fresh read-only native subagent, then `python3 $R record`. Never review your own work in this session to satisfy a required review.
 - Implementation, merging, conflict resolution, fixes and cleanup stay in this session. Evidence lives in the run dir; put the selected model, fallbacks with reasons, verdicts and the gate result in the report.
 

@@ -4,12 +4,14 @@ Each review task runs on exactly ONE selected model, in a fresh read-only sessio
 fixed priority (never skipped for speed or cost, never substituted):
 
   1. Claude Opus 5.5, effort medium, via Claude Code   (claude -p)
-  2. GPT-6.1 Sol, effort high, via Codex CLI           (codex exec)
   3. DeepSeek V4.1 Flash 1017 (opencode-go/deepseek-v4.1-flash, the 1017 build per OpenCode), effort high, via OpenCode Go (opencode run)
   4. the invoking session's own model/effort in its own harness
 
+Priority 2 (formerly GPT-6.1 Sol via Codex) is retired and intentionally unused; the remaining
+numbers are kept stable so recorded evidence keeps its numbering.
+
 Before a candidate runs, only documented local interfaces are probed (CLI presence, help text,
-auth status, model catalogue, the machine's official Codex availability check). A candidate is
+auth status, model catalogue). A candidate is
 `available` (usage confirmed), `unknown` (usable, usage not reported: attempted through the normal
 review run, never a paid preliminary call), `exhausted` or `unavailable` (skipped). A failed run is
 classified (exhausted, auth, unsupported, transient, timeout, incomplete, substituted); its partial
@@ -41,13 +43,12 @@ KINDS = {
 PREFERRED = (
     {'priority': 1, 'harness': 'claude-code', 'model': 'claude-opus-5-5', 'display': 'Claude Opus 5.5',
      'effort': 'medium'},
-    {'priority': 2, 'harness': 'codex', 'model': 'gpt-6.1-sol', 'display': 'GPT-6.1 Sol', 'effort': 'high'},
     {'priority': 3, 'harness': 'opencode', 'provider': 'opencode-go', 'model': 'deepseek-v4.1-flash',
      'display': 'DeepSeek V4.1 Flash 1017', 'effort': 'high'},
 )
-HARNESS_CLI = {'claude-code': 'claude', 'codex': 'codex', 'opencode': 'opencode', 'pi': 'pi'}
+HARNESS_CLI = {'claude-code': 'claude', 'opencode': 'opencode', 'pi': 'pi'}
 HARNESS_ALIASES = {'claude': 'claude-code', 'claude-code': 'claude-code', 'claudecode': 'claude-code',
-                   'codex': 'codex', 'codex-cli': 'codex', 'opencode': 'opencode', 'pi': 'pi'}
+                   'opencode': 'opencode', 'pi': 'pi'}
 RESULT_BEGIN, RESULT_END = 'DEPUP_REVIEW_RESULT_BEGIN', 'DEPUP_REVIEW_RESULT_END'
 PLAN_KINDS = {
     'plan': 'architecture decisions and the implementation plan for the whole upgrade',
@@ -111,11 +112,16 @@ def detect_harness(environ):
     """Best-effort harness hint from documented environment markers; the agent's explicit value wins."""
     if environ.get('CLAUDECODE'):
         return 'claude-code'
-    if environ.get('CODEX_THREAD_ID') or environ.get('CODEX_SANDBOX'):
-        return 'codex'
     if environ.get('OPENCODE'):
         return 'opencode'
     return None
+
+
+def retired_route(candidate):
+    """Codex CLI and GPT models are retired (2026-11-10): never run, hand off to or fall back to them."""
+    harness = str(candidate.get('harness') or '').lower()
+    model = str(candidate.get('model') or '').lower()
+    return harness.startswith('codex') or 'openai' in model or re.search(r'(^|/)gpt-', model) is not None
 
 
 def candidate_key(candidate):
@@ -259,12 +265,9 @@ class Router:
     """Selects and runs one reviewer per review task. All external effects go through injectables."""
 
     def __init__(self, runner=default_runner, which=shutil.which, sleep=time.sleep, clock=time.time,
-                 environ=None, codex_availability=None, timeout=1800, max_retries=1, retry_delay=10):
+                 environ=None, timeout=1800, max_retries=1, retry_delay=10):
         self.runner, self.which, self.sleep, self.clock = runner, which, sleep, clock
         self.environ = dict(os.environ if environ is None else environ)
-        default_check = os.path.expanduser('~/.claude/scripts/codex-availability')
-        self.codex_availability = (codex_availability if codex_availability is not None else
-                                   self.environ.get('DEPUP_CODEX_AVAILABILITY') or default_check)
         self.timeout, self.max_retries, self.retry_delay = timeout, max_retries, retry_delay
 
     # ------------------------------------------------------------------ state
@@ -347,46 +350,6 @@ class Router:
         return {'status': UNKNOWN, 'usage': 'unknown', 'reason': 'ready; usage not reported before the run',
                 'checks': checks}
 
-    def _probe_codex(self, candidate, checks, review_id):
-        script = self.codex_availability
-        if not (script and os.path.isfile(script) and os.access(script, os.X_OK)):
-            login = self.runner(['codex', 'login', 'status'], timeout=30, env=self.child_env('codex'))
-            text = (login['stdout'] or '') + (login['stderr'] or '')
-            checks.append('codex login status: rc %s' % login['rc'])
-            if login['rc'] != 0 or re.search(r'not logged in|api key', text, re.I):
-                return {'status': UNAVAILABLE, 'usage': 'n/a', 'reason': 'not-authenticated', 'checks': checks}
-            checks.append('quota: codex availability check not installed; usage unknown')
-            return {'status': UNKNOWN, 'usage': 'unknown', 'reason': 'authenticated; usage unknown', 'checks': checks}
-        label = ['--label', 'depup-' + review_id] if review_id != 'probe' else []
-        result = self.runner([script, '--model', candidate['model']] + label, timeout=90, env=self.child_env('codex'))
-        data = last_json_object(result['stdout'])
-        if not isinstance(data, dict) or 'verdict' not in data:
-            checks.append('codex-availability: unreadable output (rc %s)' % result['rc'])
-            return {'status': UNKNOWN, 'usage': 'unknown', 'reason': 'availability check unreadable', 'checks': checks}
-        verdict, reason = data.get('verdict'), str(data.get('reason', ''))
-        checks.append('codex-availability (app-server account/rateLimits/model list): %s, %s' % (verdict, reason))
-        efforts = (data.get('models') or {}).get(candidate['model'])
-        if isinstance(efforts, list) and efforts:
-            checks.append('model catalogue: %s efforts %s' % (candidate['model'], ', '.join(map(str, efforts))))
-            if candidate['effort'] not in efforts:
-                return {'status': UNAVAILABLE, 'usage': 'n/a', 'reason': 'unsupported-effort', 'checks': checks}
-        elif candidate['model'] in (data.get('uncatalogued') or []):
-            checks.append('model catalogue: %s uncatalogued (support verified by the run)' % candidate['model'])
-        resets = [to_epoch(w.get('resetsAt')) for b in data.get('buckets') or [] if isinstance(b, dict)
-                  for w in b.get('windows') or [] if isinstance(w, dict)]
-        resets_at = epoch_iso(min([r for r in resets if r], default=None))
-        if verdict == 'eligible':
-            return {'status': AVAILABLE, 'usage': 'confirmed', 'reason': reason, 'checks': checks,
-                    'source': data.get('source'), 'resets_at': resets_at, 'label': label and label[1]}
-        if verdict == 'unverified':
-            return {'status': UNKNOWN, 'usage': 'unknown', 'reason': reason, 'checks': checks,
-                    'label': label and label[1]}
-        if re.search(r'not installed|not operational', reason):
-            return {'status': UNAVAILABLE, 'usage': 'n/a', 'reason': 'missing-cli', 'checks': checks}
-        if re.search(r'not authenticated|auth type', reason):
-            return {'status': UNAVAILABLE, 'usage': 'n/a', 'reason': 'not-authenticated: ' + reason, 'checks': checks}
-        return {'status': EXHAUSTED, 'usage': 'exhausted', 'reason': reason, 'checks': checks, 'resets_at': resets_at}
-
     def _probe_opencode(self, candidate, checks, review_id):
         listing = self.runner(['opencode', 'api', 'model.list'], timeout=90, env=self.child_env('opencode'))
         data = last_json_object(listing['stdout'])
@@ -428,9 +391,6 @@ class Router:
             for key in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
                         'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX'):
                 env.pop(key, None)
-        if harness == 'codex':
-            for key in ('OPENAI_API_KEY', 'CODEX_API_KEY'):
-                env.pop(key, None)
         if harness == 'opencode':
             env['OPENCODE_CONFIG_CONTENT'] = json.dumps(OPENCODE_AGENT)  # run-local read-only agent
         return env
@@ -444,11 +404,6 @@ class Router:
                     '--no-session-persistence', '--strict-mcp-config',  # no user MCP servers (they can write
                     '--output-format', 'stream-json', '--verbose']      # into granted dirs, e.g. serena's .serena/)
             return argv + (['--effort', effort] if effort else [])
-        if harness == 'codex':
-            argv = ['codex', 'exec', '-m', model, '--sandbox', 'read-only', '--ephemeral', '--skip-git-repo-check',
-                    '--ignore-user-config', '-c', 'skills.include_instructions=false', '-C', attempt_dir,
-                    '--json', '-o', os.path.join(attempt_dir, 'final.md')]
-            return argv + (['-c', 'model_reasoning_effort=%s' % effort] if effort else []) + [prompt]
         if harness == 'opencode':
             target = probe.get('resolved_model') or model
             return ['opencode', 'run', '--standalone', '--agent', 'depup-reviewer', '--format', 'json',
@@ -511,15 +466,6 @@ class Router:
                     outcome['forced_category'] = 'substituted'
                     failure = failure or 'run reported models %s, not %s' % (sorted(models), candidate['model'])
             return text, failure
-        if harness == 'codex':
-            final, text = os.path.join(attempt_dir, 'final.md'), None
-            if os.path.isfile(final):
-                with open(final, encoding='utf-8', errors='replace') as handle:
-                    text = handle.read()
-            errors = [str(e.get('message') or e.get('error') or e) for e in json_lines(res['stdout'])
-                      if str(e.get('type', '')).endswith(('error', 'failed'))]
-            failure = '; '.join(errors)[:500] or (None if text else 'no final message')
-            return text, failure if (failure and (res['rc'] != 0 or not text)) else None
         if harness == 'opencode':
             # Only the model's own text parts count; tool output (files it read) never can.
             events = list(json_lines(res['stdout']))
@@ -558,6 +504,9 @@ class Router:
                       'effort': candidate.get('effort'), 'attempts': []}
             evidence['candidates'].append(record)
             if candidate.get('session'):
+                if retired_route(candidate):
+                    record.update(status=UNAVAILABLE, reason='retired: Codex CLI and GPT models are never used')
+                    continue
                 if candidate['harness'] not in HARNESS_CLI or not candidate['model']:
                     record.update(status='handoff', reason='harness %r has no CLI adapter or the session model is '
                                   'unknown: run this review in a fresh-context native subagent of the invoking '
@@ -587,9 +536,6 @@ class Router:
                 outcome, done = self.execute(candidate, probe, ctx, ctx['prompt'], attempt_dir)
                 outcome['attempt_dir'] = attempt_dir
                 record['attempts'].append(outcome)
-                if probe.get('label') and candidate['harness'] == 'codex':
-                    self.runner([self.codex_availability, '--label', probe['label'], '--done'], timeout=90,
-                                env=self.child_env('codex'))  # official cost ledger; never a model call
                 if done:
                     record.update(status='selected', usage=('confirmed' if (outcome.get('usage') or {}).get('status')
                                                             in ('allowed', 'allowed_warning') else probe['usage']))

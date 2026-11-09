@@ -79,7 +79,7 @@ class ProfileTests(RoutedCase):
             with open(os.path.join(SKILLS, skill, 'SKILL.md'), encoding='utf-8') as handle:
                 text = handle.read()
             self.assertIn('routed_task.py', text)
-            for model in ('Opus 5.5', 'GPT-6.1 Sol', 'DeepSeek V4.1 Flash 1017'):
+            for model in ('Opus 5.5', 'DeepSeek V4.1 Flash 1017'):
                 self.assertIn(model, text)
         self.assertEqual(rt.load_profile('consolidate')['review_kinds']['reconciliation']['evidence'], 'git-inventory')
 
@@ -145,19 +145,14 @@ class PlanningTests(RoutedCase):
 
     def test_2_every_fallback_stage_including_the_invoking_session(self):
         run = self.start('consolidate')
-        self.use(FakeHarnesses(self.tmp, missing={'claude'}, reviews={'codex': [{'final': PLAN_TEXT}]}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude'}, reviews={'opencode': [{'stdout': json.dumps(
+            {'type': 'text', 'part': {'text': PLAN_TEXT}})}]}))
         _, entry = self.rt('plan', run, '--context', self.handoff('a\n'), *SESSION)
-        self.assertEqual((entry['selected']['model'], entry['selected']['effort']), ('gpt-6.1-sol', 'high'))
-        self.assertEqual(entry['candidates'][0]['reason'], 'missing-cli')
-
-        self.use(FakeHarnesses(self.tmp, missing={'claude'}, codex_verdict='ineligible', reviews={
-            'opencode': [{'stdout': json.dumps({'type': 'text', 'part': {'text': PLAN_TEXT}})}]}))
-        _, entry = self.rt('plan', run, '--context', self.handoff('b\n'), *SESSION)
         self.assertEqual((entry['selected']['harness'], entry['selected']['model'], entry['selected']['effort']),
                          ('opencode', 'deepseek-v4.1-flash', 'high'))
-        self.assertEqual(entry['selected']['resolved_model'], 'opencode-go/deepseek-v4.1-flash')
+        self.assertEqual(entry['candidates'][0]['reason'], 'missing-cli')
 
-        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'}, codex_verdict='ineligible',
+        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'},
                              reviews={'pi': [{'stdout': PLAN_TEXT}]})
         self.use(fake)
         _, entry = self.rt('plan', run, '--context', self.handoff('c\n'), '--session-harness', 'pi',
@@ -179,19 +174,19 @@ class RoutingFailureTests(RoutedCase):
         fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': claude_result(GOOD)}]})
         _, entry = self.review(run, fake)
         self.assertEqual(entry['candidates'][0]['status'], 'selected')
-        self.assertFalse(any(c[0] == fake.script for c in fake.calls), 'no lower probe, no preliminary call')
+        self.assertFalse([c for c in fake.calls if c[:3] == ['opencode', 'api', 'model.list']],
+                         'no lower probe, no preliminary call')
 
     def test_3_auth_failure_exhaustion_and_unsupported_model_fall_back_without_substitution(self):
         run = self.start('frontend-ui-ux-overhaul')
         models = {'data': [{'id': 'deepseek-v4.1-flash-preview', 'providerID': 'opencode-go', 'status': 'active',
                             'variants': [{'id': 'high'}]}]}
-        fake = FakeHarnesses(self.tmp, claude_logged_in=False, codex_verdict='ineligible', opencode_models=models,
+        fake = FakeHarnesses(self.tmp, claude_logged_in=False, opencode_models=models,
                              reviews={'claude-code': [{'stdout': claude_result(GOOD)}]})
         _, entry = self.review(run, fake)
         reasons = [c['reason'] for c in entry['candidates']]
         self.assertEqual(reasons[0], 'not-authenticated')
-        self.assertIn('not authenticated', reasons[1])
-        self.assertEqual(reasons[2], 'unsupported-model', 'a near id is never substituted')
+        self.assertEqual(reasons[1], 'unsupported-model', 'a near id is never substituted')
         self.assertEqual(entry['selected']['priority'], 4, 'invoking session (Claude Code, its own model/effort)')
         argv = fake.review_calls()[-1]
         self.assertEqual((argv[argv.index('--model') + 1], argv[argv.index('--effort') + 1]),
@@ -201,27 +196,30 @@ class RoutingFailureTests(RoutedCase):
         run = self.start('frontend-ui-ux-overhaul')
         rejected = claude_result('partial', error=True, status='rejected')
         fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': rejected, 'rc': 1}],
-                                                'codex': [{'final': GOOD}]})
+                                                'opencode': [{'stdout': json.dumps(
+                                                    {'type': 'text', 'part': {'text': GOOD}})}]})
         _, entry = self.review(run, fake)
-        self.assertEqual(entry['selected']['model'], 'gpt-6.1-sol')
+        self.assertEqual(entry['selected']['model'], 'deepseek-v4.1-flash')
         self.assertEqual(entry['candidates'][0]['attempts'][0]['category'], 'exhausted')
         attempts = os.path.join(os.path.dirname(entry['entry']), 'attempts')
         self.assertTrue(any(os.path.isfile(os.path.join(attempts, d, 'DISCARDED')) for d in os.listdir(attempts)))
 
         run = self.start('frontend-ui-ux-overhaul')  # fresh run: the exhaustion above is remembered per run
         busy = fail(stderr='529 overloaded')
-        fake = FakeHarnesses(self.tmp, reviews={'claude-code': [busy, busy], 'codex': [{'final': GOOD}]})
+        fake = FakeHarnesses(self.tmp, reviews={'claude-code': [busy, busy],
+                                                'opencode': [{'stdout': json.dumps(
+                                                    {'type': 'text', 'part': {'text': GOOD}})}]})
         _, entry = self.review(run, fake)
         self.assertEqual(len(entry['candidates'][0]['attempts']), 2, 'one retry, then fall back')
-        self.assertEqual(entry['selected']['model'], 'gpt-6.1-sol')
+        self.assertEqual(entry['selected']['model'], 'deepseek-v4.1-flash')
         self.assertEqual(len(fake.sleeps), 1)
 
     def test_11_harness_compatibility(self):
         run = self.start('consolidate')
-        code, out = self.rt('review', run, '--kind', 'code', '--base', self.base, '--session-harness', 'codex')
+        code, out = self.rt('review', run, '--kind', 'code', '--base', self.base, '--session-harness', 'pi')
         self.assertEqual(code, 1)
         self.assertIn('--session-model', out['error'], 'adapter harness must name its model')
-        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'}, codex_verdict='ineligible')
+        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'})
         self.use(fake)
         code, entry = self.rt('review', run, '--kind', 'code', '--base', self.base, '--session-harness', 'freebuff',
                               '--session-model', 'x')
@@ -279,7 +277,7 @@ class ReviewGateTests(RoutedCase):
     def test_7_unavailable_required_review_blocks(self):
         run = self.start('frontend-ui-ux-overhaul')
         bad = fail(stderr='not logged in')
-        self.use(FakeHarnesses(self.tmp, missing={'opencode'}, codex_verdict='ineligible',
+        self.use(FakeHarnesses(self.tmp, missing={'opencode'},
                                reviews={'claude-code': [bad, bad]}))
         _, entry = self.rt('review', run, '--kind', 'code', '--base', self.base, '--required', *SESSION)
         self.assertEqual(entry['status'], 'unavailable')
@@ -350,7 +348,7 @@ class SkillSpecificTests(RoutedCase):
     def test_12_dependency_upgrade_router_is_shared_not_copied(self):
         self.assertEqual(os.path.realpath(rr.__file__), os.path.join(SKILL_DIR, 'scripts', 'review_router.py'))
         self.assertEqual([(c['model'], c['effort'], c['harness']) for c in rr.PREFERRED],
-                         [('claude-opus-5-5', 'medium', 'claude-code'), ('gpt-6.1-sol', 'high', 'codex'),
+                         [('claude-opus-5-5', 'medium', 'claude-code'),
                           ('deepseek-v4.1-flash', 'high', 'opencode')])
         with open(os.path.join(SKILL_DIR, 'scripts', 'routed_task.py'), encoding='utf-8') as handle:
             source = handle.read()
@@ -366,7 +364,7 @@ class ReviewFindingRegressionTests(RoutedCase):
         self.rt('review', run, '--kind', 'code', '--required', *SESSION)
         self.assertEqual(self.rt('gate', run)[0], 0)
         bad = fail(stderr='not logged in')
-        self.use(FakeHarnesses(self.tmp, missing={'opencode'}, codex_verdict='ineligible',
+        self.use(FakeHarnesses(self.tmp, missing={'opencode'},
                                reviews={'claude-code': [bad, bad]}))
         _, entry = self.rt('review', run, '--kind', 'code', '--rerun', *SESSION)  # forgot --required
         self.assertEqual(entry['status'], 'unavailable')
@@ -379,7 +377,7 @@ class ReviewFindingRegressionTests(RoutedCase):
         self.use(FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': claude_result(GOOD)}]}))
         self.rt('review', run, '--kind', 'reconciliation', '--required', '--context', self.handoff('ledger A\n'),
                 *SESSION)
-        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode'}, codex_verdict='ineligible'))
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode'}))
         self.rt('review', run, '--kind', 'reconciliation', '--required', '--context', self.handoff('ledger B\n'),
                 '--session-harness', 'freebuff', '--session-model', 'x')
         self.assertEqual(self.rt('gate', run)[0], 1)
