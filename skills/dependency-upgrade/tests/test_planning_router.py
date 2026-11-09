@@ -69,26 +69,28 @@ class PlanningTests(IntegrationCase):
 
     def test_fallback_order_matches_reviews(self):
         start, _ = self.plan_run()
-        self.use(FakeHarnesses(self.tmp, missing={'claude'}, reviews={'codex': [{'final': PLAN_TEXT}]}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude'}, reviews={'opencode': [{'stdout': json.dumps(
+            {'type': 'text', 'part': {'text': PLAN_TEXT}})}]}))
         _, entry = self.run_plan(start['run_ref'])
-        self.assertEqual((entry['selected']['model'], entry['selected']['effort']), ('gpt-6.1-sol', 'high'))
+        self.assertEqual((entry['selected']['harness'], entry['selected']['model'], entry['selected']['effort']),
+                         ('opencode', 'deepseek-v4.1-flash', 'high'))
+        self.assertEqual(entry['selected']['resolved_model'], 'opencode-go/deepseek-v4.1-flash')
         self.assertEqual(entry['candidates'][0]['reason'], 'missing-cli', 'fallback reason recorded')
 
         start, _ = self.plan_run()
-        self.use(FakeHarnesses(self.tmp, missing={'claude'}, codex_verdict='ineligible',
-                               reviews={'opencode': [{'stdout': json.dumps({'type': 'text',
-                                                                            'part': {'text': PLAN_TEXT}})}]}))
-        _, entry = self.run_plan(start['run_ref'], '--rerun')
-        self.assertEqual(entry['selected']['resolved_model'], 'opencode-go/deepseek-v4.1-flash')
-        self.assertEqual(entry['selected']['effort'], 'high')
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode'}, reviews={'pi': [{'stdout': PLAN_TEXT}]}))
+        _, entry = self.run_plan(start['run_ref'], '--session-harness', 'pi', '--session-model', 'pm',
+                                 '--session-effort', 'high')
+        self.assertEqual((entry['selected']['priority'], entry['selected']['model']), (4, 'pm'))
 
     def test_exhausted_opus_is_remembered_across_planning_and_reviews(self):
         start, _ = self.plan_run()
         fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': EXHAUSTED_EVENTS, 'rc': 1}],
-                                                'codex': [{'final': PLAN_TEXT}]})
+                                                'opencode': [{'stdout': json.dumps(
+                                                    {'type': 'text', 'part': {'text': PLAN_TEXT}})}]})
         self.use(fake)
         _, entry = self.run_plan(start['run_ref'])
-        self.assertEqual(entry['selected']['harness'], 'codex')
+        self.assertEqual(entry['selected']['harness'], 'opencode')
         self.assertEqual(entry['candidates'][0]['status'], 'exhausted')
         self.assertTrue(os.path.isfile(os.path.join(start['run_dir'], 'plans', entry['id'], 'attempts',
                                                     '01-p1-claude-code', 'DISCARDED')))
@@ -101,7 +103,7 @@ class PlanningTests(IntegrationCase):
 
     def test_invalid_plan_falls_back_and_all_unavailable_hands_off_to_the_session(self):
         start, _ = self.plan_run()
-        fake = FakeHarnesses(self.tmp, missing={'codex', 'opencode'},
+        fake = FakeHarnesses(self.tmp, missing={'opencode'},
                              reviews={'claude-code': [{'stdout': claude_result(GOOD)}],  # a review block, not a plan
                                       'pi': [{'stdout': PLAN_TEXT}]})
         self.use(fake)
@@ -111,7 +113,7 @@ class PlanningTests(IntegrationCase):
         self.assertEqual((entry['selected']['priority'], entry['selected']['model']), (4, 'pm'),
                          'final fallback: the session model and effort exactly')
         start, _ = self.plan_run()
-        self.use(FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode'}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode'}))
         _, entry = self.run_plan(start['run_ref'], '--session-harness', 'freebuff')
         self.assertEqual(entry['status'], 'handoff')
         self.assertIn('planning record', entry['next'])
@@ -120,7 +122,7 @@ class PlanningTests(IntegrationCase):
         code, rec = self.cli('planning', 'record', start['run_ref'], '--plan-id', entry['id'], '--output', out,
                              '--planner', 'freebuff/m@high')
         self.assertEqual((code, rec['status'], rec['selected']['priority']), (0, 'completed', 4))
-        self.use(FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode', 'pi'}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode', 'pi'}))
         _, none = self.cli('planning', 'run', start['run_ref'], '--context', self.handoff('other'),
                            '--session-harness', 'pi', '--session-model', 'm')
         self.assertEqual(none['status'], 'unavailable')
@@ -170,7 +172,7 @@ class PlanningTests(IntegrationCase):
 
     def test_handoff_summary_record_guard_and_dirty_tree_reuse_key(self):
         start, root = self.plan_run()
-        self.use(FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode'}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode'}))
         _, entry = self.run_plan(start['run_ref'], '--session-harness', 'freebuff')
         _, rep = self.cli('report', start['run_ref'])
         with open(rep['summary'], encoding='utf-8') as handle:

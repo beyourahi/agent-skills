@@ -9,7 +9,6 @@ wrapper prepares inputs, binds the result to the candidate and writes the eviden
 | # | Model | Effort | Harness (only) | Pre-run checks (no model calls) |
 | --- | --- | --- | --- | --- |
 | 1 | Claude Opus 5.5 (`claude-opus-5-5`) | medium | Claude Code `claude -p` | CLI on PATH and runs; `claude --help` effort list; `claude auth status --json` (only loggedIn/method/provider/plan kept) |
-| 2 | GPT-6.1 Sol (`gpt-6.1-sol`) | high | Codex CLI `codex exec` | CLI; `~/.claude/scripts/codex-availability` (official app-server account, rate limits, model catalogue, credit reserve) or `codex login status` |
 | 3 | DeepSeek V4.1 Flash 1017 (`deepseek-v4.1-flash`) | high | OpenCode Go `opencode run` | CLI; `opencode api model.list`: provider `opencode-go`, exact id `deepseek-v4.1-flash`, `high` variant |
 | 4 | invoking session's model | session effort | invoking harness | CLI presence only |
 
@@ -17,16 +16,16 @@ Never skip a higher priority for speed or cost, never substitute a model, provid
 never change global defaults, accounts or credentials. #3 matches the OpenCode Go id
 `deepseek-v4.1-flash` exactly (OpenCode confirmed this id serves the 1017 build, 2026-11-03); other ids are never used in its place. A Claude run whose `modelUsage` names only other
 models is classified `substituted` and discarded (pass full model ids, not aliases). Reviewer
-processes never see `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`CODEX_API_KEY`, and Claude API-key auth
+processes never see `ANTHROPIC_API_KEY`, and Claude API-key auth
 counts as unavailable: subscriptions only, no new spend.
 
 ## Statuses
 
-- `available`: usable and usage confirmed (Codex availability check `eligible`).
+- `available`: usable and usage confirmed by a pre-run check.
 - `unknown`: usable but usage is not reported before a run (Claude Code, OpenCode Go). Unknown is
   not exhausted: the review itself is the attempt; no preliminary model call is made. Claude's
   `rate_limit_event` from the run records actual usage status and reset time.
-- `exhausted`: confirmed by a check (`spend control`, credits below the reserve, rate limit) or by the
+- `exhausted`: confirmed by a pre-run check (rate limit) or by the
   run (`rate_limit_event` `rejected`, 429/usage-limit errors). Remembered for the run until its reset
   time (else 30 min) in `<run_dir>/reviews/provider-state.json`.
 - `unavailable`: missing/broken CLI, not authenticated, unsupported model or effort, catalogue
@@ -47,7 +46,7 @@ same candidate is returned as `reused` without a model call.
 Final fallback: `--session-harness/--session-model/--session-effort` launch the same CLI adapters
 with exactly those values (skipped if identical to a candidate that already failed definitively).
 An explicit `--session-harness` always wins over environment detection. A session in an adapter
-harness (claude-code, codex, opencode, pi) without `--session-model` is refused up front. Only for a
+harness (claude-code, opencode, pi) without `--session-model` is refused up front. Only for a
 harness without an adapter (e.g. Freebuff) does the router return
 `status: handoff` with a `next` command: run `prompt.md` in a fresh-context, read-only native
 subagent of the session (never the authoring conversation), save its answer, then
@@ -66,9 +65,9 @@ Reviewers run with cwd = their run-local attempt folder (outside the repository,
 effects such as MCP or indexer caches cannot dirty the candidate and repository-controlled harness
 config/hooks do not load), with the worktree granted read-only, and read-only tools: Claude `--tools Read,Grep,Glob
 --permission-mode dontAsk --no-session-persistence --strict-mcp-config` (no user MCP servers: one such server,
-Serena, wrote `.serena/` into the granted repository and invalidated a result); Codex `--sandbox read-only --ephemeral` with the
-lean flags; OpenCode a run-local `depup-reviewer` agent (`OPENCODE_CONFIG_CONTENT`, `--standalone`)
-that denies everything but read/grep/glob/list and `.env` reads; Pi `--tools read,grep,find,ls
+Serena, wrote `.serena/` into the granted repository and invalidated a result); OpenCode a run-local
+`depup-reviewer` agent (`OPENCODE_CONFIG_CONTENT`, `--standalone`) that denies everything but
+read/grep/glob/list and `.env` reads; Pi `--tools read,grep,find,ls
 --no-session`. `DEPUP_REVIEW_ROUTER_ACTIVE=1` makes any nested `review run` refuse. The candidate must
 be a clean commit, and a result is discarded if the worktree changed during the review.
 
@@ -82,7 +81,7 @@ independent and security reviews on the same model stay distinct fresh sessions)
 attempt, fallback and reason) and `entry.json` (what `review run` prints).
 
 The reviewer ends with a `DEPUP_REVIEW_RESULT_BEGIN … END` JSON block, read only from the model's
-own final text (Claude `result`, Codex last message, OpenCode `text` parts; never tool output): `verdict` pass|fail and
+own final text (Claude `result`, OpenCode `text` parts; never tool output): `verdict` pass|fail and
 findings with severity Important|Nit|Pre-existing. Any Important finding forces `fail`.
 
 Report: put entries in `reviews`. The entries on disk for the current candidate are authoritative

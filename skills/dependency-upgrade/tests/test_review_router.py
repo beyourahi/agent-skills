@@ -1,12 +1,11 @@
 """Reviewer routing: one selected model per review, usage-aware fallback, honest PASS gating.
 
-Every CLI (claude, codex, opencode, pi, codex-availability) is mocked; no test makes a model call.
+Every CLI (claude, opencode, pi) is mocked; no test makes a model call.
 """
 import hashlib
 import json
 import os
 import re
-import stat
 
 from tests.support import TempCase, depup, git_init, load, sh, write
 
@@ -45,25 +44,21 @@ def claude_result(text, model='claude-opus-5-5', error=False, status='allowed', 
 class FakeHarnesses:
     """Scripted CLIs. `reviews[harness]` is a list of responses consumed one per review run."""
 
-    def __init__(self, tmp, missing=(), codex_verdict='eligible', codex_efforts=('medium', 'high'),
-                 claude_logged_in=True, claude_help=CLAUDE_HELP, opencode_models=OPENCODE_MODELS, reviews=None):
+    def __init__(self, tmp, missing=(), claude_logged_in=True, claude_help=CLAUDE_HELP,
+                 opencode_models=OPENCODE_MODELS, reviews=None):
         self.missing = set(missing)
-        self.codex_verdict, self.codex_efforts = codex_verdict, list(codex_efforts)
         self.claude_logged_in, self.claude_help = claude_logged_in, claude_help
         self.opencode_models = opencode_models
         self.reviews = {k: list(v) for k, v in (reviews or {}).items()}
         self.calls = []
         self.cwds = []
         self.sleeps = []
-        self.script = os.path.join(tmp, 'codex-availability')
-        write(self.script, '#!/bin/sh\nexit 0\n')
-        os.chmod(self.script, os.stat(self.script).st_mode | stat.S_IEXEC)
 
     def which(self, name):
         return None if name in self.missing else '/usr/bin/' + name
 
     def review_calls(self):
-        return [c for c in self.calls if c[:2] in (['claude', '-p'], ['codex', 'exec'], ['opencode', 'run'])
+        return [c for c in self.calls if c[:2] in (['claude', '-p'], ['opencode', 'run'])
                 or (c[0] == 'pi' and '-p' in c)]
 
     def runner(self, argv, cwd=None, env=None, timeout=60):
@@ -72,16 +67,6 @@ class FakeHarnesses:
         name = argv[0]
         if argv[1:] == ['--version']:
             return ok('%s 1.0\n' % name)
-        if name == self.script:
-            if '--done' in argv:
-                return fail('{"verdict": "recorded"}')
-            data = {'verdict': self.codex_verdict, 'reason': {
-                'eligible': 'authenticated ChatGPT subscription with headroom',
-                'unverified': 'backend did not report ordinaryUsageAllowed; usage unknown',
-                'ineligible': 'codex not authenticated'}.get(self.codex_verdict, self.codex_verdict),
-                'models': {'gpt-6.1-sol': self.codex_efforts}, 'uncatalogued': [],
-                'buckets': [{'windows': [{'usedPercent': 10, 'resetsAt': 1893456000}]}]}
-            return (ok if self.codex_verdict == 'eligible' else fail)(json.dumps(data))
         if argv[:2] == ['claude', '--help']:
             return ok(self.claude_help)
         if argv[:3] == ['claude', 'auth', 'status']:
@@ -89,17 +74,15 @@ class FakeHarnesses:
                                   'email': 'someone@example.invalid', 'subscriptionType': 'pro'}))
         if argv[:3] == ['opencode', 'api', 'model.list']:
             return ok(json.dumps(self.opencode_models))
-        harness = {'claude': 'claude-code', 'codex': 'codex', 'opencode': 'opencode', 'pi': 'pi'}[name]
+        harness = {'claude': 'claude-code', 'opencode': 'opencode', 'pi': 'pi'}[name]
         assert env and env.get(rr.GUARD_ENV) == '1', 'reviewers run with the recursion guard set'
         response = self.reviews[harness].pop(0)
-        if harness == 'codex' and response.get('final') is not None:
-            write(argv[argv.index('-o') + 1], response['final'])
         return {k: response.get(k, d) for k, d in (('rc', 0), ('stdout', ''), ('stderr', ''), ('error', None))}
 
 
 def make_router(fake, environ=None, max_retries=1):
     return rr.Router(runner=fake.runner, which=fake.which, sleep=fake.sleeps.append, environ=environ or {},
-                     codex_availability=fake.script, timeout=60, max_retries=max_retries, retry_delay=7)
+                     timeout=60, max_retries=max_retries, retry_delay=7)
 
 
 class RouterCase(TempCase):
@@ -132,52 +115,52 @@ class RouterUnitTests(RouterCase):
         self.assertIn(self.tmp, argv[argv.index('--add-dir') + 1:], 'the worktree is granted read access')
         self.assertEqual(done[1]['verdict'], 'pass')
         self.assertEqual(evidence['candidates'][0]['usage'], 'confirmed', 'rate_limit_event confirms usage')
-        self.assertFalse(any(c[0] == fake.script for c in fake.calls), 'lower candidates are not even probed')
+        self.assertFalse([c for c in fake.calls if c[:3] == ['opencode', 'api', 'model.list']],
+                         'lower candidates are not even probed')
 
-    def test_2_opus_confirmed_exhausted_selects_sol_without_calling_opus(self):
-        fake = FakeHarnesses(self.tmp, reviews={'codex': [{'final': GOOD}]})
+    def test_2_opus_confirmed_exhausted_selects_deepseek_without_calling_opus(self):
+        fake = FakeHarnesses(self.tmp, reviews={'opencode': [{'stdout': json.dumps(
+            {'type': 'text', 'part': {'text': GOOD}})}]})
         router = make_router(fake)
         ctx = self.ctx()
         router.remember(ctx['reviews_dir'], rr.PREFERRED[0], rr.EXHAUSTED, 'run failed: exhausted', 'earlier',
                         router.clock() + 600)
         evidence, selected, _ = router.route(ctx, {})
-        self.assertEqual((selected['model'], selected['effort']), ('gpt-6.1-sol', 'high'))
+        self.assertEqual((selected['model'], selected['effort']), ('deepseek-v4.1-flash', 'high'))
         self.assertFalse([c for c in fake.calls if c[0] == 'claude'], 'confirmed exhaustion is not re-tried')
         self.assertEqual(evidence['candidates'][0]['status'], rr.EXHAUSTED)
         argv = fake.review_calls()[0]
-        self.assertEqual(argv[argv.index('-m') + 1], 'gpt-6.1-sol')
-        self.assertIn('model_reasoning_effort=high', argv)
-        self.assertEqual(argv[argv.index('--sandbox') + 1], 'read-only')
+        self.assertEqual(argv[argv.index('--model') + 1], 'opencode-go/deepseek-v4.1-flash#high')
+        self.assertEqual(argv[argv.index('--agent') + 1], 'depup-reviewer')
 
-    def test_3_first_two_unavailable_selects_deepseek_flash_on_opencode_go(self):
-        fake = FakeHarnesses(self.tmp, missing={'claude'}, codex_verdict='ineligible',
+    def test_3_claude_unavailable_selects_deepseek_flash_on_opencode_go(self):
+        fake = FakeHarnesses(self.tmp, missing={'claude'},
                              reviews={'opencode': [{'stdout': json.dumps({'type': 'text', 'part': {'text': GOOD}})}]})
         evidence, selected, done = self.route(fake)
         self.assertEqual(selected['priority'], 3)
         argv = fake.review_calls()[0]
         self.assertEqual(argv[argv.index('--model') + 1], 'opencode-go/deepseek-v4.1-flash#high')
         self.assertEqual(argv[argv.index('--agent') + 1], 'depup-reviewer')
-        self.assertEqual([c['status'] for c in evidence['candidates'][:2]], [rr.UNAVAILABLE, rr.UNAVAILABLE])
+        self.assertEqual(evidence['candidates'][0]['status'], rr.UNAVAILABLE)
         self.assertEqual(done[1]['verdict'], 'pass')
 
-    def test_4_all_three_unavailable_uses_invoking_session_model_and_effort(self):
-        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'}, codex_verdict='ineligible',
-                             reviews={'codex': [{'final': GOOD}]})
-        evidence, selected, _ = self.route(fake, {'harness': 'codex', 'model': 'gpt-6-luna', 'effort': 'xhigh'})
-        self.assertEqual((selected['priority'], selected['model'], selected['effort']), (4, 'gpt-6-luna', 'xhigh'))
+    def test_4_all_routes_unavailable_uses_invoking_session_model_and_effort(self):
+        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'}, reviews={'pi': [{'stdout': GOOD}]})
+        evidence, selected, _ = self.route(fake, {'harness': 'pi', 'model': 'session-model', 'effort': 'xhigh'})
+        self.assertEqual((selected['priority'], selected['model'], selected['effort']),
+                         (4, 'session-model', 'xhigh'))
         argv = fake.review_calls()[0]
-        self.assertEqual(argv[argv.index('-m') + 1], 'gpt-6-luna')
-        self.assertIn('model_reasoning_effort=xhigh', argv)
+        self.assertEqual(argv[argv.index('--model') + 1], 'session-model')
+        self.assertEqual(argv[argv.index('--thinking') + 1], 'xhigh')
         # Unknown harness or model: the invoking session must run it natively, never a guessed CLI.
-        fake2 = FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode'})
+        fake2 = FakeHarnesses(self.tmp, missing={'claude', 'opencode'})
         evidence2, selected2, done2 = self.route(fake2, {'harness': 'freebuff', 'model': 'x'})
         self.assertEqual(evidence2['outcome'], 'handoff')
         self.assertIsNone(done2)
         self.assertEqual(fake2.review_calls(), [])
 
     def test_5_unknown_usage_attempts_preferred_model_without_preliminary_calls(self):
-        fake = FakeHarnesses(self.tmp, codex_verdict='unverified',
-                             reviews={'claude-code': [{'stdout': claude_result(GOOD, status=None)}]})
+        fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': claude_result(GOOD, status=None)}]})
         evidence, selected, _ = self.route(fake)
         self.assertEqual(selected['priority'], 1)
         self.assertEqual(evidence['candidates'][0]['usage'], 'unknown', 'unknown is reported, not assumed')
@@ -186,12 +169,13 @@ class RouterUnitTests(RouterCase):
     def test_6_mid_review_exhaustion_discards_partial_and_restarts_on_next(self):
         partial = claude_result(PARTIAL_FINDING + '\nClaude AI usage limit reached', error=True, status='rejected',
                                 api_status=429)
+        opencode_done = {'stdout': json.dumps({'type': 'text', 'part': {'text': GOOD}})}
         fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': partial, 'rc': 1}],
-                                                'codex': [{'final': GOOD}]})
+                                                'opencode': [dict(opencode_done)]})
         router = make_router(fake)
         ctx = self.ctx()
         evidence, selected, done = router.route(ctx, {})
-        self.assertEqual(selected['model'], 'gpt-6.1-sol')
+        self.assertEqual(selected['model'], 'deepseek-v4.1-flash')
         first = evidence['candidates'][0]
         self.assertEqual(first['status'], rr.EXHAUSTED)
         self.assertEqual(first['attempts'][0]['category'], 'exhausted')
@@ -199,48 +183,50 @@ class RouterUnitTests(RouterCase):
         self.assertNotIn('drops a column', done[0], 'partial findings never reach the accepted review')
         self.assertEqual(len(fake.review_calls()), 2)
         # The exhaustion is remembered: the next review of the run skips Opus without calling it.
-        fake.reviews['codex'] = [{'final': GOOD}]
+        fake.reviews['opencode'] = [dict(opencode_done)]
         router.route(ctx, {})
         self.assertEqual(len([c for c in fake.review_calls() if c[0] == 'claude']), 1)
 
     def test_7_transient_errors_retry_once_then_fall_back(self):
         overloaded = {'stdout': claude_result('API Error: 529 overloaded', error=True, api_status=529), 'rc': 1}
+        opencode_done = {'stdout': json.dumps({'type': 'text', 'part': {'text': GOOD}})}
         fake = FakeHarnesses(self.tmp, reviews={'claude-code': [overloaded, dict(overloaded)],
-                                                'codex': [{'final': GOOD}]})
+                                                'opencode': [dict(opencode_done)]})
         evidence, selected, _ = self.route(fake)
-        self.assertEqual(selected['model'], 'gpt-6.1-sol')
+        self.assertEqual(selected['model'], 'deepseek-v4.1-flash')
         self.assertEqual([a['category'] for a in evidence['candidates'][0]['attempts']], ['transient', 'transient'])
         self.assertEqual(fake.sleeps, [7], 'one bounded retry with backoff')
         recovered = FakeHarnesses(self.tmp, reviews={'claude-code': [dict(overloaded), {'stdout': claude_result(GOOD)}]})
         _, selected2, _ = self.route(recovered)
         self.assertEqual(selected2['priority'], 1, 'a transient error that clears keeps the preferred model')
         timed_out = FakeHarnesses(self.tmp, reviews={'claude-code': [{'rc': None, 'error': 'timeout after 60s'}],
-                                                     'codex': [{'final': GOOD}]})
+                                                     'opencode': [dict(opencode_done)]})
         evidence3, selected3, _ = self.route(timed_out)
-        self.assertEqual(selected3['priority'], 2)
+        self.assertEqual(selected3['priority'], 3)
         self.assertEqual(len(evidence3['candidates'][0]['attempts']), 1, 'a timeout is not retried')
 
     def test_8_unsupported_model_or_effort_moves_on_and_never_substitutes(self):
         no_medium = CLAUDE_HELP.replace('medium, ', '')
         only_other_build = {'data': [OPENCODE_MODELS['data'][1]]}  # another build only: not the configured model
-        fake = FakeHarnesses(self.tmp, claude_help=no_medium, codex_efforts=('low', 'medium'),
-                             opencode_models=only_other_build, reviews={'pi': [{'stdout': GOOD}]})
+        fake = FakeHarnesses(self.tmp, claude_help=no_medium, opencode_models=only_other_build,
+                             reviews={'pi': [{'stdout': GOOD}]})
         evidence, selected, _ = self.route(fake, {'harness': 'pi', 'model': 'anthropic/claude-sonnet-5-5',
                                                   'effort': 'high'})
-        self.assertEqual([c['reason'] for c in evidence['candidates'][:3]],
-                         ['unsupported-effort', 'unsupported-effort', 'unsupported-model'])
+        self.assertEqual([c['reason'] for c in evidence['candidates'][:2]],
+                         ['unsupported-effort', 'unsupported-model'])
         self.assertEqual(selected['priority'], 4)
         self.assertFalse([c for c in fake.calls if c[:2] == ['opencode', 'run']],
                          'another build id is never used in place of deepseek-v4.1-flash')
         os.remove(os.path.join(self.ctx()['reviews_dir'], 'provider-state.json'))  # unsupported is cached per run
         substituted = FakeHarnesses(self.tmp, reviews={
-            'claude-code': [{'stdout': claude_result(GOOD, model='claude-sonnet-5-5')}], 'codex': [{'final': GOOD}]})
+            'claude-code': [{'stdout': claude_result(GOOD, model='claude-sonnet-5-5')}],
+            'opencode': [{'stdout': json.dumps({'type': 'text', 'part': {'text': GOOD}})}]})
         evidence2, selected2, _ = self.route(substituted)
         self.assertEqual(evidence2['candidates'][0]['attempts'][0]['category'], 'substituted')
-        self.assertEqual(selected2['priority'], 2)
+        self.assertEqual(selected2['priority'], 3)
 
     def test_9_all_routes_fail_reports_unavailable(self):
-        fake = FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode', 'pi'})
+        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode', 'pi'})
         evidence, selected, done = self.route(fake, {'harness': 'pi', 'model': 'm', 'effort': 'high'})
         self.assertEqual(evidence['outcome'], 'unavailable')
         self.assertIsNone(selected)
@@ -248,25 +234,44 @@ class RouterUnitTests(RouterCase):
 
     def test_10_same_priorities_from_every_harness(self):
         orders = []
-        for environ in ({'CLAUDECODE': '1'}, {'CODEX_THREAD_ID': 't'}, {'OPENCODE': '1'}, {}):
+        for environ in ({'CLAUDECODE': '1'}, {'OPENCODE': '1'}, {}):
             fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': claude_result('x', error=True,
                                                                                             status='rejected')}],
-                                                    'codex': [{'final': GOOD}]})
+                                                    'opencode': [{'stdout': json.dumps({'type': 'text',
+                                                                                        'part': {'text': GOOD}})}]})
             evidence, selected, _ = self.route(fake, {'model': 'session-model', 'effort': 'high'}, environ=environ)
             orders.append(([c['priority'] for c in evidence['candidates']], selected['model'],
                            [c[0] for c in fake.review_calls()]))
             os.remove(os.path.join(self.ctx()['reviews_dir'], 'provider-state.json'))
         self.assertEqual(len({json.dumps(o) for o in orders}), 1, orders)
-        self.assertEqual(orders[0], ([1, 2], 'gpt-6.1-sol', ['claude', 'codex']))
+        self.assertEqual(orders[0], ([1, 3], 'deepseek-v4.1-flash', ['claude', 'opencode']))
 
     def test_session_fallback_skips_a_definitively_failed_duplicate(self):
-        fake = FakeHarnesses(self.tmp, missing={'opencode'}, codex_verdict='ineligible',
+        fake = FakeHarnesses(self.tmp, missing={'opencode'},
                              reviews={'claude-code': [{'stdout': claude_result('x', error=True, status='rejected')}]})
         evidence, selected, _ = self.route(fake, {'harness': 'claude-code', 'model': 'claude-opus-5-5',
                                                   'effort': 'medium'})
         self.assertIsNone(selected)
         self.assertIn('already failed', evidence['candidates'][-1]['reason'])
         self.assertEqual(len(fake.review_calls()), 1)
+
+    def test_retired_codex_or_gpt_session_is_refused_without_any_call(self):
+        for session in ({'harness': 'codex', 'model': 'any-model'},
+                        {'harness': 'pi', 'model': 'openai-codex/gpt-6.1-sol', 'effort': 'high'}):
+            fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'})
+            evidence, selected, done = self.route(fake, session)
+            self.assertEqual(evidence['outcome'], 'unavailable', session)
+            self.assertIsNone(selected)
+            self.assertIsNone(done)
+            self.assertIn('retired', evidence['candidates'][-1]['reason'])
+            self.assertEqual(fake.review_calls(), [], 'no reviewer run, no handoff to a retired route')
+
+    def test_preferred_candidates_never_use_codex_or_a_gpt_model(self):
+        self.assertEqual([c['priority'] for c in rr.PREFERRED], [1, 3])
+        self.assertEqual([c['harness'] for c in rr.PREFERRED], ['claude-code', 'opencode'])
+        self.assertFalse([c for c in rr.PREFERRED if c['model'].lower().startswith('gpt-')])
+        self.assertNotIn('codex', rr.HARNESS_CLI)
+        self.assertNotIn('codex', rr.HARNESS_ALIASES)
 
     def test_nested_orchestration_refused(self):
         fake = FakeHarnesses(self.tmp)
@@ -346,7 +351,7 @@ class ReviewIntegrationTests(IntegrationCase):
     def test_9_required_review_unavailable_prevents_pass(self):
         start, wt = self.upgrade_run()
         ref, run_dir = start['run_ref'], start['run_dir']
-        self.use(FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode', 'pi'}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode', 'pi'}))
         _, sec = self.cli('review', 'run', ref, '--kind', 'security', '--subject', 'db', '--required',
                           '--session-harness', 'pi', '--session-model', 'm', '--session-effort', 'high')
         self.assertEqual(sec['status'], 'unavailable')
@@ -384,7 +389,7 @@ class ReviewIntegrationTests(IntegrationCase):
 
     def test_session_handoff_records_native_review(self):
         start, wt = self.upgrade_run()
-        self.use(FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode'}))
+        self.use(FakeHarnesses(self.tmp, missing={'claude', 'opencode'}))
         _, entry = self.cli('review', 'run', start['run_ref'], '--kind', 'independent', '--subject', 'db',
                             '--session-harness', 'freebuff')
         self.assertEqual(entry['status'], 'handoff')
@@ -405,7 +410,7 @@ class ReviewIntegrationTests(IntegrationCase):
         self.assertEqual(code, 0)
         self.assertEqual(out['model_calls'], 0)
         self.assertEqual(fake.review_calls(), [])
-        self.assertEqual([c['priority'] for c in out['candidates']], [1, 2, 3])
+        self.assertEqual([c['priority'] for c in out['candidates']], [1, 3])
 
 
 class FindingRegressionTests(RouterCase):
@@ -413,7 +418,7 @@ class FindingRegressionTests(RouterCase):
 
     def test_opencode_tool_output_never_counts_as_the_result(self):
         tool_event = {'type': 'tool_use', 'part': {'state': {'output': GOOD}}}  # a file the reviewer read
-        fake = FakeHarnesses(self.tmp, missing={'claude'}, codex_verdict='ineligible',
+        fake = FakeHarnesses(self.tmp, missing={'claude'},
                              reviews={'opencode': [{'stdout': json.dumps(tool_event) + '\n' +
                                                     json.dumps({'type': 'error', 'error': {'name': 'APIError'}})}],
                                       'pi': [{'stdout': 'no result block'}]})
@@ -424,7 +429,8 @@ class FindingRegressionTests(RouterCase):
     def test_review_prose_never_drives_failure_classification(self):
         prose = 'The 401 unauthorized handling and rate limit (429) retry look fine but I ran out of turns.'
         fake = FakeHarnesses(self.tmp, reviews={'claude-code': [{'stdout': claude_result(prose, error=False).replace(
-            '"subtype": "success"', '"subtype": "error_max_turns"'), 'rc': 1}], 'codex': [{'final': GOOD}]})
+            '"subtype": "success"', '"subtype": "error_max_turns"'), 'rc': 1}],
+            'opencode': [{'stdout': json.dumps({'type': 'text', 'part': {'text': GOOD}})}]})
         router = make_router(fake)
         ctx = self.ctx()
         evidence, _, _ = router.route(ctx, {})
@@ -432,14 +438,15 @@ class FindingRegressionTests(RouterCase):
         self.assertIsNone(router.cached(ctx['reviews_dir'], rr.PREFERRED[0]), 'Opus is not held for later reviews')
 
     def test_explicit_session_harness_wins_and_adapter_needs_a_model(self):
-        fake = FakeHarnesses(self.tmp, missing={'claude', 'codex', 'opencode'})
-        evidence, _, _ = self.route(fake, {'harness': 'freebuff'}, environ={'CODEX_HOME': '/x'})
-        self.assertEqual(evidence['outcome'], 'handoff')
+        fake = FakeHarnesses(self.tmp, missing={'claude', 'opencode'})
+        evidence, _, _ = self.route(fake, {'harness': 'freebuff'}, environ={'CLAUDECODE': '1'})
+        self.assertEqual(evidence['outcome'], 'handoff', 'the explicit harness wins over detection')
         with self.assertRaises(RuntimeError):
-            self.route(FakeHarnesses(self.tmp), {'harness': 'codex'})
+            self.route(FakeHarnesses(self.tmp), {'harness': 'pi'})
 
     def test_api_key_billing_is_never_used(self):
-        fake = FakeHarnesses(self.tmp, reviews={'codex': [{'final': GOOD}]})
+        fake = FakeHarnesses(self.tmp, reviews={
+            'opencode': [{'stdout': json.dumps({'type': 'text', 'part': {'text': GOOD}})}]})
         original = fake.runner
 
         def runner(argv, cwd=None, env=None, timeout=60):
@@ -447,10 +454,11 @@ class FindingRegressionTests(RouterCase):
                 return ok(json.dumps({'loggedIn': True, 'authMethod': 'api_key'}))
             return original(argv, cwd=cwd, env=env, timeout=timeout)
         fake.runner = runner
-        router = make_router(fake, environ={'ANTHROPIC_API_KEY': 'x', 'OPENAI_API_KEY': 'y'})
+        router = make_router(fake, environ={'ANTHROPIC_API_KEY': 'x'})
         _, selected, _ = router.route(self.ctx(), {})
-        self.assertEqual(selected['priority'], 2)
-        self.assertNotIn('OPENAI_API_KEY', router.child_env('codex'))
+        self.assertEqual((selected['priority'], selected['harness']), (3, 'opencode'))
+        self.assertFalse([c for c in fake.review_calls() if c[0] == 'claude'],
+                         'API-key billing is never used for Claude')
         self.assertNotIn('ANTHROPIC_API_KEY', router.child_env('claude-code'))
 
 
