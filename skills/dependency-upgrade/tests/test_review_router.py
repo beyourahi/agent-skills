@@ -2,10 +2,14 @@
 
 Every CLI (claude, opencode, pi) is mocked; no test makes a model call.
 """
+import fnmatch
 import hashlib
 import json
 import os
 import re
+import shutil
+import tempfile
+from unittest import mock
 
 from tests.support import TempCase, depup, git_init, load, sh, write
 
@@ -278,6 +282,229 @@ class RouterUnitTests(RouterCase):
         with self.assertRaises(RuntimeError):
             self.route(fake, environ={rr.GUARD_ENV: '1'})
         self.assertEqual(fake.calls, [])
+
+    def test_opencode_reviewer_can_read_only_allowed_directories(self):
+        worktree = os.path.join(self.tmp, 'worktree')
+        review_dir = os.path.join(self.tmp, 'run', 'reviews', 'critical-full-diff-abc')
+        read_dir = os.path.join(self.tmp, 'other-clone')
+        ctx = dict(self.ctx(), worktree=worktree, review_dir=review_dir, read_dirs=[read_dir])
+        config = rr.opencode_agent(ctx)
+        rules = config['agents']['depup-reviewer']['permissions']
+        self.assertIn({'action': '*', 'resource': '*', 'effect': 'deny'}, rules)
+        self.assertIn({'action': 'external_directory', 'resource': '*', 'effect': 'deny'}, rules)
+        self.assertIn({'action': 'read', 'resource': '*', 'effect': 'deny'}, rules)
+        for directory in (worktree, review_dir, read_dir):
+            boundary = os.path.join(os.path.abspath(directory), '*')
+            self.assertIn({'action': 'external_directory', 'resource': boundary, 'effect': 'allow'}, rules)
+            self.assertIn({'action': 'read', 'resource': os.path.abspath(directory), 'effect': 'allow'}, rules)
+            self.assertIn({'action': 'read', 'resource': boundary, 'effect': 'allow'}, rules)
+        for pattern in ('**/.ssh/**', '**/.aws/**', '**/.npmrc', '**/id_ed25519*', '**/id_rsa*',
+                        '**/.git-credentials', '**/.cargo/credentials*'):
+            self.assertIn({'action': 'read', 'resource': pattern, 'effect': 'deny'}, rules)
+        self.assertNotIn({'action': 'read', 'resource': '*', 'effect': 'allow'}, rules)
+        self.assertNotIn({'action': 'external_directory', 'resource': '*', 'effect': 'allow'}, rules)
+        self.assertIn({'action': 'external_directory', 'resource': '*', 'effect': 'deny'},
+                      rr.opencode_agent()['agents']['depup-reviewer']['permissions'],
+                      'without a review context nothing outside the working directory is readable')
+        router = make_router(FakeHarnesses(self.tmp))
+        env = router.child_env('opencode', ctx)
+        self.assertEqual(json.loads(env['OPENCODE_CONFIG_CONTENT']), config,
+                         'the per-review sandbox reaches the reviewer process')
+
+    def test_opencode_secret_deny_blocks_credentials_but_not_source_files(self):
+        rules = rr.opencode_agent(self.ctx())['agents']['depup-reviewer']['permissions']
+        worktree = os.path.abspath(self.ctx()['worktree'])
+
+        def allowed(path):  # ordered rules, last match wins
+            effect = 'deny'
+            for rule in rules:
+                if rule['action'] in ('read', '*') and fnmatch.fnmatch(path, rule['resource']):
+                    effect = rule['effect']
+            return effect == 'allow'
+
+        self.assertTrue(allowed(os.path.join(worktree, 'src', 'id_utils.ts')),
+                        'normal source named id_* stays readable')
+        self.assertTrue(allowed(os.path.join(worktree, 'packages', 'app', 'src', 'id_helpers.ts')))
+        self.assertFalse(allowed(os.path.expanduser('~/.ssh/id_ed25519')))
+        self.assertFalse(allowed(os.path.expanduser('~/.ssh/id_rsa')))
+        self.assertFalse(allowed(os.path.join(worktree, '.envrc')), 'direnv files can hold secrets')
+        self.assertFalse(allowed(os.path.join(worktree, '.cargo', 'credentials.toml')))
+        self.assertFalse(allowed(os.path.join(worktree, 'cert.p12')))
+        self.assertFalse([rule for rule in rules if rule['action'] == 'glob' and rule['effect'] == 'deny'],
+                         'a glob resource is a pattern, not a path: those denies do nothing')
+        for action in ('read', 'list'):
+            self.assertIn({'action': action, 'resource': '**/.git-credentials', 'effect': 'deny'}, rules)
+
+    def test_opencode_symlink_escaping_the_sandbox_falls_back(self):
+        outside = tempfile.mkdtemp(prefix='depup-outside-')
+        self.addCleanup(shutil.rmtree, outside, True)
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        os.symlink(outside, os.path.join(worktree, 'docs'))
+        ctx = dict(self.ctx(), worktree=worktree)
+        fake = FakeHarnesses(self.tmp, missing={'claude'}, reviews={'pi': [{'stdout': GOOD}]})
+        evidence, selected, _ = make_router(fake).route(ctx, {'harness': 'pi', 'model': 'm', 'effort': 'high'})
+        record = [c for c in evidence['candidates'] if c['harness'] == 'opencode'][0]
+        self.assertEqual(record['status'], rr.UNAVAILABLE)
+        self.assertTrue(record['reason'].startswith('symlink escapes the reviewer sandbox: '), record['reason'])
+        self.assertIn('docs', record['reason'])
+        self.assertFalse([c for c in fake.review_calls() if c[:2] == ['opencode', 'run']],
+                         'the OpenCode candidate never runs when a link escapes')
+        self.assertEqual(selected['priority'], 4, 'the router falls back to the next candidate')
+        self.assertTrue(os.path.islink(os.path.join(worktree, 'docs')), 'links are never followed or modified')
+
+    def test_opencode_symlink_inside_the_sandbox_stays_allowed(self):
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'src', 'a.ts'), 'export const a = 1\n')
+        os.symlink(os.path.join(worktree, 'src'), os.path.join(worktree, 'link'))
+        ctx = dict(self.ctx(), worktree=worktree)
+        fake = FakeHarnesses(self.tmp, missing={'claude'},
+                             reviews={'opencode': [{'stdout': json.dumps({'type': 'text',
+                                                                          'part': {'text': GOOD}})}]})
+        evidence, selected, done = make_router(fake).route(ctx, {})
+        self.assertEqual(selected['priority'], 3, evidence['candidates'])
+        self.assertEqual(done[1]['verdict'], 'pass')
+
+    def _fake_toolchain_home(self):
+        """A stand-in HOME whose uv tool directory acts as one of the listed toolchain prefixes."""
+        home = os.path.join(self.tmp, 'fake-home')
+        prefix = os.path.join(home, '.local', 'share', 'uv')
+        os.makedirs(prefix, exist_ok=True)
+        return home, prefix
+
+    def test_opencode_non_executable_toolchain_file_is_an_escape(self):
+        """A link under `docs/` to a credentials file in a toolchain prefix is never tolerated."""
+        home, prefix = self._fake_toolchain_home()
+        secret = os.path.join(prefix, 'credentials', 'credentials.toml')
+        write(secret, 'token = "SECRET"\n')
+        os.chmod(secret, 0o600)  # a regular file, but not executable
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        os.makedirs(os.path.join(worktree, 'docs'), exist_ok=True)
+        os.symlink(secret, os.path.join(worktree, 'docs', 'x'))
+        with mock.patch.object(rr.os.path, 'expanduser', lambda path: home):
+            self.assertFalse(rr._toolchain_target(secret), 'a non-executable file is not a toolchain target')
+            reason = rr.symlink_escape([worktree])
+        self.assertTrue(reason and os.path.join('docs', 'x') in reason, reason)
+        ctx = dict(self.ctx(), worktree=worktree)
+        fake = FakeHarnesses(self.tmp, missing={'claude'}, reviews={'pi': [{'stdout': GOOD}]})
+        with mock.patch.object(rr.os.path, 'expanduser', lambda path: home):
+            evidence, selected, _ = make_router(fake).route(
+                ctx, {'harness': 'pi', 'model': 'm', 'effort': 'high'})
+        record = [c for c in evidence['candidates'] if c['harness'] == 'opencode'][0]
+        self.assertEqual(record['status'], rr.UNAVAILABLE)
+        self.assertFalse([c for c in fake.review_calls() if c[:2] == ['opencode', 'run']])
+
+    def test_opencode_executable_toolchain_file_outside_bin_is_still_an_escape(self):
+        """Executability alone is not enough: the link itself must sit directly in bin/ or Scripts/."""
+        home, prefix = self._fake_toolchain_home()
+        tool = os.path.join(prefix, 'python')
+        write(tool, '#!/bin/sh\nexit 0\n')
+        os.chmod(tool, 0o755)
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        os.makedirs(os.path.join(worktree, 'docs'), exist_ok=True)
+        os.symlink(tool, os.path.join(worktree, 'docs', 'x'))
+        with mock.patch.object(rr.os.path, 'expanduser', lambda path: home):
+            self.assertTrue(rr._toolchain_target(tool), 'the target itself is a listed executable')
+            reason = rr.symlink_escape([worktree])
+        self.assertTrue(reason and os.path.join('docs', 'x') in reason, reason)
+
+    def test_opencode_bin_link_to_an_executable_toolchain_file_is_allowed(self):
+        """The tolerated shape: `bin/python` (or `Scripts/python`) linking to a toolchain executable."""
+        home, prefix = self._fake_toolchain_home()
+        tool = os.path.join(prefix, 'python')
+        write(tool, '#!/bin/sh\nexit 0\n')
+        os.chmod(tool, 0o755)
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        os.makedirs(os.path.join(worktree, 'bin'), exist_ok=True)
+        os.symlink(tool, os.path.join(worktree, 'bin', 'python'))
+        os.makedirs(os.path.join(worktree, 'Scripts'), exist_ok=True)
+        os.symlink(tool, os.path.join(worktree, 'Scripts', 'python.exe'))
+        with mock.patch.object(rr.os.path, 'expanduser', lambda path: home):
+            self.assertIsNone(rr.symlink_escape([worktree]))
+
+    def test_opencode_venv_style_link_to_a_toolchain_interpreter_is_allowed(self):
+        """A normal `.venv/bin/python -> /usr/bin/python3` must not take OpenCode out of the route."""
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        os.makedirs(os.path.join(worktree, '.venv', 'bin'), exist_ok=True)
+        os.symlink('/usr/bin/python3', os.path.join(worktree, '.venv', 'bin', 'python'))
+        self.assertIsNone(rr.symlink_escape([worktree]))
+        self.assertTrue(rr._toolchain_target('/usr/bin/python3'))
+        ctx = dict(self.ctx(), worktree=worktree)
+        fake = FakeHarnesses(self.tmp, missing={'claude'},
+                             reviews={'opencode': [{'stdout': json.dumps({'type': 'text',
+                                                                          'part': {'text': GOOD}})}]})
+        evidence, selected, done = make_router(fake).route(ctx, {})
+        self.assertEqual(selected['priority'], 3, evidence['candidates'])
+        self.assertEqual(done[1]['verdict'], 'pass')
+
+    def test_opencode_symlink_to_a_home_directory_still_escapes(self):
+        """Toolchain files are allowed, directories outside never are."""
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        os.symlink(os.path.expanduser('~'), os.path.join(worktree, 'home-link'))
+        reason = rr.symlink_escape([worktree])
+        self.assertTrue(reason and 'home-link' in reason, reason)
+        ctx = dict(self.ctx(), worktree=worktree)
+        fake = FakeHarnesses(self.tmp, missing={'claude'}, reviews={'pi': [{'stdout': GOOD}]})
+        evidence, selected, _ = make_router(fake).route(ctx, {'harness': 'pi', 'model': 'm', 'effort': 'high'})
+        record = [c for c in evidence['candidates'] if c['harness'] == 'opencode'][0]
+        self.assertEqual(record['status'], rr.UNAVAILABLE)
+        self.assertIn('home-link', record['reason'])
+        self.assertFalse([c for c in fake.review_calls() if c[:2] == ['opencode', 'run']])
+
+    def test_opencode_symlink_to_a_home_file_outside_the_toolchain_list_escapes(self):
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        outside = os.path.join(os.path.expanduser('~'), '.depup-not-a-toolchain-file')
+        os.symlink(outside, os.path.join(worktree, 'notes-link'))
+        reason = rr.symlink_escape([worktree])
+        self.assertTrue(reason and 'notes-link' in reason, reason)
+        self.assertFalse(rr._toolchain_target(outside), 'only the listed toolchain prefixes are allowed')
+
+    def test_opencode_symlink_walk_stops_at_the_budget_and_fails_closed(self):
+        worktree = os.path.join(self.tmp, 'wt')
+        for index in range(5):
+            write(os.path.join(worktree, 'src', 'file%d.ts' % index), 'export const x = 1\n')
+        with mock.patch.object(rr, 'SYMLINK_WALK_BUDGET', 2):
+            self.assertEqual(rr.symlink_escape([worktree]), 'symlink check budget exceeded')
+        ctx = dict(self.ctx(), worktree=worktree)
+        fake = FakeHarnesses(self.tmp, missing={'claude'}, reviews={'pi': [{'stdout': GOOD}]})
+        with mock.patch.object(rr, 'SYMLINK_WALK_BUDGET', 2):
+            evidence, selected, _ = make_router(fake).route(
+                ctx, {'harness': 'pi', 'model': 'm', 'effort': 'high'})
+        record = [c for c in evidence['candidates'] if c['harness'] == 'opencode'][0]
+        self.assertEqual(record['status'], rr.UNAVAILABLE)
+        self.assertEqual(record['reason'], 'symlink check budget exceeded')
+        self.assertFalse([c for c in fake.review_calls() if c[:2] == ['opencode', 'run']])
+
+    def test_opencode_symlink_check_runs_once_per_route(self):
+        """The OpenCode session candidate reuses the check instead of walking the sandbox twice."""
+        worktree = os.path.join(self.tmp, 'wt')
+        write(os.path.join(worktree, 'package.json'), {'name': 'wt'})
+        calls = []
+
+        def fake_escape(dirs):
+            calls.append(dirs)
+            return 'symlink escapes the reviewer sandbox: docs'
+
+        fake = FakeHarnesses(self.tmp, missing={'claude'})
+        with mock.patch.object(rr, 'symlink_escape', side_effect=fake_escape):
+            make_router(fake, environ={'OPENCODE': '1'}).route(
+                dict(self.ctx(), worktree=worktree), {'harness': 'opencode', 'model': 'm', 'effort': 'high'})
+        self.assertEqual(len(calls), 1, 'one sandbox walk per route() call, not per OpenCode candidate')
+
+    def test_reviewer_env_never_exposes_anthropic_credentials(self):
+        router = make_router(FakeHarnesses(self.tmp), environ={
+            'ANTHROPIC_API_KEY': 'a', 'ANTHROPIC_AUTH_TOKEN': 'b', 'OPENAI_API_KEY': 'keep'})
+        for harness in ('claude-code', 'opencode', 'pi'):
+            env = router.child_env(harness)
+            self.assertNotIn('ANTHROPIC_API_KEY', env, harness)
+            self.assertNotIn('ANTHROPIC_AUTH_TOKEN', env, harness)
+            self.assertEqual(env['OPENAI_API_KEY'], 'keep', 'other providers are untouched')
 
     def test_result_parsing_is_strict(self):
         self.assertIsNone(rr.parse_result('no block')[0])

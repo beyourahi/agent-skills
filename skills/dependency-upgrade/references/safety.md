@@ -26,11 +26,27 @@ and continue with the original task. Only commands documented by the official pr
 
 ## Read-only queries in an untrusted repo
 `depup.py outdated` runs native package-manager queries with dependency scripts disabled,
-`GOFLAGS=-mod=readonly` and `GOTOOLCHAIN=local`, and validated package names. It skips the
-native query (registry fallback, listed under `hazards`) when repo config would execute
-code on load: a pnpmfile, a `packageManager` that is not `name@version` (Corepack
-download), or a `rust-toolchain` with a custom `path`. Report every hazard; don't run
-those tools by hand to get around the skip.
+package-manager version self-download disabled (`npm_config_manage_package_manager_versions=false`
+and the `pnpm_config_*` equivalents), Corepack networking off (`COREPACK_ENABLE_NETWORK=0`, so it
+cannot fetch a package manager at all), `GOFLAGS=-mod=readonly` and `GOTOOLCHAIN=local`, and
+validated package names. It skips the native query (registry fallback, listed under `hazards`) when
+repo config would execute code or use credentials on load: a `pnpmfile` or `globalPnpmfile` /
+`global-pnpmfile` hook, `configDependencies`, `managePackageManagerVersions` turned back on (also in
+a parent `.npmrc` / `pnpm-workspace.yaml`), a `.corepack.env` from the package up to the repo root, a
+`packageManager` that is not `name@version` (Corepack download), a `rust-toolchain.toml` (or an
+extensionless `rust-toolchain` that is not a bare channel name) that sets `toolchain.path`, or a
+parent `.cargo/config(.toml)` that defines `[registries]` / `[env]`, a `[source...]` replacement, a
+credential provider or alias, `net.git-fetch-with-cli`, a `build.rustc*` compiler, a top-level
+`include` / `[[include]]` (it loads config files the walk never scans), or a top-level `[unstable]`
+(it can enable that loader).
+Cargo configs and TOML toolchain files are parsed as TOML, so dotted keys, inline tables and quoted
+keys/headers are inspected the same way, and the check fails closed: no TOML parser (Python < 3.11),
+invalid TOML, a parser recursion, or a file past the read cap counts as a hazard. Both files are read
+whole (never a truncated prefix), so padding cannot hide a setting. A bare channel name in a legacy
+`rust-toolchain` file (`stable`, `1.74.0`, `nightly-2024-01-01`) is not a hazard and needs no parser.
+Any repo config larger than the read cap is reported rather than partially inspected. Plain
+`registry=` / `@scope:registry=` lines are normal auth configuration, not a hazard. Report every
+hazard; don't run those tools by hand to get around the skip.
 
 ## Install scripts
 Dependency lifecycle scripts execute code. Prefer installs that skip them while resolving

@@ -16,7 +16,7 @@ Never skip a higher priority for speed or cost, never substitute a model, provid
 never change global defaults, accounts or credentials. #3 matches the OpenCode Go id
 `deepseek-v4.1-flash` exactly (OpenCode confirmed this id serves the 1017 build, 2026-11-03); other ids are never used in its place. A Claude run whose `modelUsage` names only other
 models is classified `substituted` and discarded (pass full model ids, not aliases). Reviewer
-processes never see `ANTHROPIC_API_KEY`, and Claude API-key auth
+processes never see `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, and Claude API-key auth
 counts as unavailable: subscriptions only, no new spend.
 
 ## Statuses
@@ -66,8 +66,15 @@ effects such as MCP or indexer caches cannot dirty the candidate and repository-
 config/hooks do not load), with the worktree granted read-only, and read-only tools: Claude `--tools Read,Grep,Glob
 --permission-mode dontAsk --no-session-persistence --strict-mcp-config` (no user MCP servers: one such server,
 Serena, wrote `.serena/` into the granted repository and invalidated a result); OpenCode a run-local
-`depup-reviewer` agent (`OPENCODE_CONFIG_CONTENT`, `--standalone`) that denies everything but
-read/grep/glob/list and `.env` reads; Pi `--tools read,grep,find,ls
+`depup-reviewer` agent (`OPENCODE_CONFIG_CONTENT`, `--standalone`) that denies everything, then allows
+reads and external-directory access only under the worktree, review directory and extra read dirs, with
+common secret paths denied (its permissions are lexical, so a symlink under those directories that
+resolves outside them marks the candidate unavailable and the router falls back; only a link that
+sits directly in a `bin` or `Scripts` directory and points at an executable regular file under a
+system/toolchain prefix (such as a `.venv/bin/python -> /usr/bin/python3`) is tolerated, never a
+link to a directory or to a non-executable file (a credentials file under a toolchain prefix is an
+escape), and a sandbox walk past 200,000 entries fails closed the same
+way. The check runs once per `route()` call and is reused for the OpenCode session candidate); Pi `--tools read,grep,find,ls
 --no-session`. `DEPUP_REVIEW_ROUTER_ACTIVE=1` makes any nested `review run` refuse. The candidate must
 be a clean commit, and a result is discarded if the worktree changed during the review.
 
@@ -138,7 +145,7 @@ tracked diff, untracked contents); `gate` passes only when, for every kind/subje
 (`required.json`, never downgraded), the NEWEST review of the current candidate (any status) is a completed
 `pass` with an intact receipt, and (git-inventory reviews) the uncut inventory hash still matches. The
 inventory includes unique-commit patches, stash contents and other worktrees'/clones' diffs; those
-directories are granted read-only to the Claude reviewer (`ctx['read_dirs']`). Files named by absolute path in
+directories are granted read-only to routed reviewers (`ctx['read_dirs']`). Files named by absolute path in
 a rendered-evidence manifest are copied into the task dir so a read-only reviewer can open them. Users today:
 `consolidate` (planning before approval; reconciliation + code review before cleanup) and
 `frontend-ui-ux-overhaul` (planning before edits; code / ui-ux / accessibility reviews before completion).

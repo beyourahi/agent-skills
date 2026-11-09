@@ -49,6 +49,11 @@ import sys
 import tempfile
 import uuid
 
+try:  # TOML configs (cargo) are inspected with the stdlib parser where it exists
+    import tomllib as _tomllib
+except ImportError:  # Python 3.9/3.10: no parser, so a cargo config cannot be cleared (fail closed)
+    _tomllib = None
+
 SCHEMA_VERSION = 1
 SKIP_DIRS = {
     '.git', 'node_modules', '.pnpm-store', 'vendor', 'target', 'dist', 'build',
@@ -57,6 +62,7 @@ SKIP_DIRS = {
     'coverage', '.wrangler', '.vercel', '.terraform', '.dependency-upgrade',
 }
 MAX_WALK_FILES = 200000
+CONFIG_READ_CAP = 200000  # a repo config is read whole or reported as a hazard, never truncated
 STEP_STATUSES = ('pending', 'running', 'done', 'failed', 'skipped', 'blocked')
 REPORT_STATUSES = ('PLAN', 'PASS', 'PARTIAL', 'BLOCKED', 'FAIL')
 REQUIRED_PASS_STEPS = ('baseline', 'verify', 'review')  # upgrade PASS needs these journal steps done
@@ -66,7 +72,13 @@ NPM_SAFE_ENV = {
     'npm_config_fund': 'false',
     'npm_config_audit': 'false',
     'NO_UPDATE_NOTIFIER': '1',
-    'npm_config_ignore_pnpmfile': 'true',  # pnpm: never load repo hooks during read-only queries
+    # pnpm reads its own settings from pnpm_config_* as well as npm_config_* (pnpm.io/npmrc):
+    # never load repo hooks and never download a different package-manager binary during a query.
+    'npm_config_ignore_pnpmfile': 'true',
+    'pnpm_config_ignore_pnpmfile': 'true',
+    'npm_config_manage_package_manager_versions': 'false',
+    'pnpm_config_manage_package_manager_versions': 'false',
+    'COREPACK_ENABLE_NETWORK': '0',  # Corepack may not fetch a package manager at all (a prompt setting does not stop it)
     'CI': '1',
 }
 
@@ -944,6 +956,32 @@ def _python_outdated(directory, root, timeout):
                      'pip list --outdated inside its venv); see references/ecosystems.md'}
 
 
+PNPM_CONFIG_HAZARD_RE = re.compile(
+    r'(?<![\w-])["\']?(?:global[\s_-]?)?pnpmfile["\']?\s*[=:]'       # pnpmfile / globalPnpmfile hooks
+    r'|(?<![\w-])config[\s_-]?dependencies\b'                         # configDependencies
+    r'|(?<![\w-])["\']?manage[\s_-]?package[\s_-]?manager[\s_-]?versions["\']?\s*[=:]\s*["\']?true\b',
+    re.I)
+COREPACK_ENV_FILE = '.corepack.env'
+
+
+def _read_config(path, limit=CONFIG_READ_CAP):
+    """(text, hazard reason): the whole file, or why it must be treated as a hazard.
+
+    Checking only the first ``limit`` bytes of a larger file would hide settings below the cut, so an
+    oversized (or unreadable) config is reported instead of partially inspected.
+    """
+    if not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, 'rb') as handle:
+            data = handle.read(limit + 1)
+    except OSError as exc:
+        return None, 'could not be read (%s)' % exc.__class__.__name__
+    if len(data) > limit:
+        return None, 'is larger than the %d-byte read cap (not inspected)' % limit
+    return data.decode('utf-8', 'replace'), None
+
+
 def native_query_hazards(directory, root, manager, pkg):
     """Repo-controlled config that would make a native read-only query execute repo code."""
     hazards = []
@@ -952,29 +990,132 @@ def native_query_hazards(directory, root, manager, pkg):
         for name in ('.pnpmfile.cjs', '.pnpmfile.mjs', 'pnpmfile.js'):
             if manager == 'pnpm' and os.path.exists(os.path.join(probe, name)):
                 hazards.append('%s executes when pnpm loads config' % os.path.relpath(os.path.join(probe, name), root))
+        if os.path.exists(os.path.join(probe, COREPACK_ENV_FILE)):
+            hazards.append('%s is Corepack configuration (the repo controls package-manager downloads)'
+                           % os.path.relpath(os.path.join(probe, COREPACK_ENV_FILE), root))
         if os.path.realpath(probe) == os.path.realpath(root) or os.path.dirname(probe) == probe:
             break
         probe = os.path.dirname(probe)
     if manager == 'pnpm':
-        for name in ('package.json', 'pnpm-workspace.yaml', '.npmrc'):
-            text = read_text(os.path.join(directory, name), 200000) or ''
-            if re.search(r'configDependencies|^\s*pnpmfile\s*[=:]', text, re.M):
-                hazards.append('%s declares pnpm configDependencies/pnpmfile (code loaded by pnpm)'
-                               % os.path.relpath(os.path.join(directory, name), root))
+        # pnpm loads .npmrc and pnpm-workspace.yaml from every directory up to the repo root.
+        configs = [os.path.join(directory, 'package.json')]
+        probe = directory
+        while True:
+            configs.extend(os.path.join(probe, name) for name in ('.npmrc', 'pnpm-workspace.yaml'))
+            if os.path.realpath(probe) == os.path.realpath(root) or os.path.dirname(probe) == probe:
+                break
+            probe = os.path.dirname(probe)
+        for path in configs:
+            text, problem = _read_config(path)
+            rel = os.path.relpath(path, root)
+            if problem:
+                hazards.append('%s %s' % (rel, problem))
+            elif text and PNPM_CONFIG_HAZARD_RE.search(text):
+                hazards.append('%s declares pnpm configDependencies/pnpmfile or enables package-manager '
+                               'version downloads (code loaded by pnpm)' % rel)
     declared = (pkg or {}).get('packageManager') or ''
     if declared and not re.match(r'^[a-z]+@\d+\.\d+\.\d+[\w.+-]*$', declared):
         hazards.append('packageManager %r is not name@version (Corepack may download and run it)' % declared[:120])
     return hazards
 
 
+CARGO_CONFIG_FILES = ('config', 'config.toml')
+CARGO_CREDENTIAL_KEYS = ('credential-provider', 'global-credential-providers', 'credential-alias')
+CARGO_PROGRAM_KEYS = ('net.git-fetch-with-cli', 'build.rustc', 'build.rustc-wrapper',
+                      'build.rustc-workspace-wrapper')
+# `include` pulls in config files the walk never sees; `[unstable]` can enable that same loader.
+CARGO_LOADER_KEYS = ('include', 'unstable')
+RUST_TOOLCHAIN_FILES = ('rust-toolchain.toml', 'rust-toolchain')
+BARE_CHANNEL_RE = re.compile(r'^[A-Za-z0-9._-]+$')  # a legacy rust-toolchain file may be just `stable`
+
+
+def _cargo_config_hazard(path):
+    """First repo-controlled cargo setting that can run code or use credentials during a query.
+
+    Parsed as TOML (dotted keys, inline tables, quoted keys and headers all reach the same structure);
+    anything not inspectable - no parser, invalid TOML, a file past the read cap - is a hazard.
+    """
+    text, problem = _read_config(path)
+    if problem:
+        return problem
+    if text is None:
+        return None
+    if _tomllib is None:
+        return 'cannot be parsed safely (TOML support needs Python 3.11+); not inspected'
+    try:
+        data = _tomllib.loads(text)
+    except (ValueError, TypeError, RecursionError) as exc:
+        return 'is not valid TOML (%s); not inspected' % exc.__class__.__name__
+    return _cargo_settings_hazard(data)
+
+
+def _cargo_settings_hazard(data):
+    """Walk the parsed config and return the first dangerous setting, in any valid TOML spelling."""
+    def walk(node, path):
+        if not isinstance(node, dict):
+            return None
+        for key in node:
+            name = str(key)
+            dotted = path + [name]
+            joined = '.'.join(dotted)
+            if not path and name in CARGO_LOADER_KEYS:
+                return 'sets top-level %s (cargo loads extra config files or enables unstable features)' % name
+            if name in ('registries', 'env'):
+                return 'defines [%s] (registry credentials/sources or repository-controlled env load)' % joined
+            if name in CARGO_CREDENTIAL_KEYS:
+                return 'sets %s (cargo may run a credential helper)' % joined
+            if dotted[0] == 'source' and name == 'replace-with':
+                return 'replaces a cargo source (%s)' % joined
+            if joined in CARGO_PROGRAM_KEYS:
+                return 'sets %s (cargo may run a repository-supplied program)' % joined
+            found = walk(node[key], dotted)
+            if found:
+                return found
+        return None
+    return walk(data, [])
+
+
+def _rust_toolchain_hazard(path):
+    """Hazard reason for a repo-controlled toolchain file, or None when it is safe.
+
+    ``rust-toolchain.toml`` is TOML; any ``toolchain.path`` points cargo at a repository-supplied
+    toolchain. The legacy extensionless ``rust-toolchain`` file is either a bare channel name or the
+    same TOML, so anything else (invalid TOML, no parser) is a hazard.
+    """
+    text, problem = _read_config(path)
+    if problem:
+        return problem
+    if text is None:
+        return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if os.path.basename(path) == 'rust-toolchain' and len(lines) == 1 and BARE_CHANNEL_RE.match(lines[0]):
+        return None  # `stable`, `1.74.0`, `nightly-2024-01-01`: nothing to load
+    if _tomllib is None:
+        return 'cannot be parsed safely (TOML support needs Python 3.11+); not inspected'
+    try:
+        data = _tomllib.loads(text)
+    except (ValueError, TypeError, RecursionError) as exc:
+        return 'is not valid TOML (%s); not inspected' % exc.__class__.__name__
+    toolchain = data.get('toolchain') if isinstance(data, dict) else None
+    if isinstance(toolchain, dict) and 'path' in toolchain:
+        return 'sets toolchain.path (repo-supplied cargo would run)'
+    return None
+
+
 def rust_toolchain_hazard(directory, root):
+    """Repo-controlled toolchain or cargo config that makes a native cargo query unsafe."""
     probe = directory
     while True:
-        for name in ('rust-toolchain.toml', 'rust-toolchain'):
-            text = read_text(os.path.join(probe, name), 20000)
-            if text and re.search(r'^\s*path\s*=', text, re.M):
-                return '%s sets a custom toolchain path (repo-supplied cargo would run)' % \
-                    os.path.relpath(os.path.join(probe, name), root)
+        for name in RUST_TOOLCHAIN_FILES:
+            path = os.path.join(probe, name)
+            hazard = _rust_toolchain_hazard(path)
+            if hazard:
+                return '%s %s' % (os.path.relpath(path, root), hazard)
+        for name in CARGO_CONFIG_FILES:
+            path = os.path.join(probe, '.cargo', name)
+            hazard = _cargo_config_hazard(path)
+            if hazard:
+                return '%s %s' % (os.path.relpath(path, root), hazard)
         if os.path.realpath(probe) == os.path.realpath(root) or os.path.dirname(probe) == probe:
             return None
         probe = os.path.dirname(probe)

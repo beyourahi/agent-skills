@@ -63,10 +63,131 @@ LOCKFILES = ('package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn
              'Cargo.lock', 'go.sum', 'uv.lock', 'poetry.lock', 'Pipfile.lock', 'pdm.lock', 'Gemfile.lock',
              'composer.lock', 'packages.lock.json', 'Package.resolved', 'gradle.lockfile', 'pubspec.lock',
              'mix.lock', 'flake.lock', 'deno.lock')
-OPENCODE_AGENT = {'agent': {'depup-reviewer': {
-    'description': 'read-only dependency-upgrade reviewer', 'mode': 'primary',
-    'permission': {'*': 'deny', 'read': {'*': 'allow', '*.env': 'deny', '*.env.*': 'deny'},
-                   'grep': 'allow', 'glob': 'allow', 'list': 'allow', 'external_directory': 'allow'}}}}
+OPENCODE_AGENT_NAME = 'depup-reviewer'
+OPENCODE_SECRET_DENY = ('*.env', '*.env.*', '**/.ssh/**', '**/.aws/**', '**/.npmrc', '**/.netrc',
+                        '**/.envrc', '**/.git-credentials', '**/.git/config', '**/.git/credentials',
+                        '**/.yarnrc.yml', '**/.pypirc',
+                        '**/.cargo/credentials*', '**/.dev.vars', '**/.dev.vars.*',
+                        '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
+                        '**/id_rsa*', '**/id_ed25519*', '**/id_ecdsa*', '**/id_dsa*',
+                        '**/.config/gh/**', '**/.docker/config.json', '**/auth.json')
+# A venv's `bin/python` normally links to a system/toolchain interpreter: that file is fine to reach.
+# Only an executable regular file under one of these prefixes, linked from a `bin`/`Scripts` directory,
+# is allowed; a link to a directory or to a non-executable file (e.g. a credentials file) never is.
+SYMLINK_TOOLCHAIN_PREFIXES = ('/usr/', '/bin/', '/opt/homebrew/', '/usr/local/', '/Library/Frameworks/',
+                              '/System/', '/Applications/Xcode.app/')
+SYMLINK_HOME_PREFIXES = ('~/.pyenv/', '~/.local/share/uv/', '~/.local/bin/', '~/.nvm/', '~/.rustup/',
+                         '~/.cargo/bin/', '~/.bun/', '~/.volta/')
+SYMLINK_BIN_DIRS = ('bin', 'Scripts')  # a toolchain link is only tolerated directly inside one of these
+SYMLINK_WALK_BUDGET = 200000  # entries inspected before the check gives up and fails closed
+
+
+def sandbox_dirs(ctx):
+    """Directories a reviewer may read for this task: worktree, review dir and extra evidence dirs."""
+    return [ctx.get('worktree'), ctx.get('review_dir')] + list(ctx.get('read_dirs') or [])
+
+
+def _toolchain_target(path):
+    """True when a link target is an executable regular file under a system/toolchain prefix."""
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        return False  # directories outside the sandbox are always an escape
+    if not os.access(real, os.X_OK):
+        return False  # a readable-but-not-executable toolchain file (credentials) is an escape
+    if any(real.startswith(prefix) for prefix in SYMLINK_TOOLCHAIN_PREFIXES):
+        return True
+    home = os.path.expanduser('~')
+    return any(real.startswith(os.path.join(home, suffix[2:])) for suffix in SYMLINK_HOME_PREFIXES)
+
+
+def symlink_escape(dirs):
+    """Reason a symlink makes the OpenCode sandbox unusable, or None when every link stays inside.
+
+    OpenCode path permissions are lexical, so a link such as ``docs/h -> $HOME`` would otherwise let
+    the reviewer read outside its sandbox. A link resolving outside is allowed only when it sits
+    directly in a ``bin``/``Scripts`` directory and its target is an executable regular file under a
+    toolchain prefix (the usual venv interpreter link). Links are only inspected, never followed or
+    modified.
+    """
+    roots = [(os.path.abspath(directory), os.path.realpath(directory)) for directory in dirs if directory]
+    if not roots:
+        return None
+    resolved = [real for _, real in roots]
+
+    def inside(path):
+        return any(path == root or path.startswith(root + os.sep) for root in resolved)
+
+    budget = SYMLINK_WALK_BUDGET
+    count = 0
+    walked = set()
+    for absolute, real in roots:
+        if not os.path.isdir(real) or real in walked:
+            continue
+        if any(real.startswith(other + os.sep) for other in walked):  # already covered by a parent root
+            continue
+        walked.add(real)
+        stack, seen = [absolute], set()
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            try:
+                with os.scandir(current) as scan:
+                    entries = list(scan)
+            except OSError:
+                continue
+            for entry in entries:
+                count += 1
+                if count > budget:
+                    return 'symlink check budget exceeded'
+                try:
+                    if entry.is_symlink():
+                        target = os.path.realpath(entry.path)
+                        if not inside(target) and not (os.path.basename(current) in SYMLINK_BIN_DIRS
+                                                       and _toolchain_target(target)):
+                            return 'symlink escapes the reviewer sandbox: %s' % os.path.relpath(entry.path, absolute)
+                        continue  # an allowed link is not followed either
+                    if entry.name == '.git':  # never descend into git internals
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                except OSError:
+                    continue
+    return None
+
+
+def opencode_agent(ctx=None):
+    """Run-local OpenCode reviewer that reads only this review's allowed directories.
+
+    OpenCode V2 permissions are ordered rules; the last match wins, so the deny-all base comes first
+    and the per-directory allows follow. ``external_directory`` and ``read`` are the path gates.
+    """
+    permissions = [
+        {'action': '*', 'resource': '*', 'effect': 'deny'},
+        {'action': 'read', 'resource': '*', 'effect': 'deny'},
+        {'action': 'external_directory', 'resource': '*', 'effect': 'deny'},
+        {'action': 'grep', 'resource': '*', 'effect': 'allow'},
+        {'action': 'glob', 'resource': '*', 'effect': 'allow'},
+        {'action': 'list', 'resource': '*', 'effect': 'allow'},
+    ]
+    dirs = []
+    if ctx:
+        dirs = sandbox_dirs(ctx)
+    for directory in dirs:
+        if not directory:
+            continue
+        absolute = os.path.abspath(directory)
+        boundary = os.path.join(absolute, '*')
+        permissions.append({'action': 'external_directory', 'resource': boundary, 'effect': 'allow'})
+        permissions.append({'action': 'read', 'resource': absolute, 'effect': 'allow'})
+        permissions.append({'action': 'read', 'resource': boundary, 'effect': 'allow'})
+    for pattern in OPENCODE_SECRET_DENY:  # defence in depth inside an allowed worktree
+        for action in ('read', 'list'):  # glob's resource is a pattern, not a path: a deny there does nothing
+            permissions.append({'action': action, 'resource': pattern, 'effect': 'deny'})
+    return {'agents': {OPENCODE_AGENT_NAME: {
+        'description': 'read-only dependency-upgrade reviewer', 'mode': 'primary',
+        'permissions': permissions}}}
 
 PATTERNS = (  # first match wins; only consulted when a run did not produce a valid result
     ('auth', re.compile(r'not logged in|unauthori[sz]ed|\b401\b|\b403\b|authentication (failed|required|error)|'
@@ -383,16 +504,18 @@ class Router:
 
     # ------------------------------------------------------------------ execution
 
-    def child_env(self, harness):
+    def child_env(self, harness, ctx=None):
         env = dict(self.environ)
         env[GUARD_ENV] = '1'  # a reviewer that tries to start another routed review is refused
+        for key in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'):
+            env.pop(key, None)  # never expose Anthropic credentials to any reviewer process
         if harness == 'claude-code':
             # A fresh top-level print session on the signed-in subscription: never API-key billing.
-            for key in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+            for key in ('CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT',
                         'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX'):
                 env.pop(key, None)
         if harness == 'opencode':
-            env['OPENCODE_CONFIG_CONTENT'] = json.dumps(OPENCODE_AGENT)  # run-local read-only agent
+            env['OPENCODE_CONFIG_CONTENT'] = json.dumps(opencode_agent(ctx))  # run-local read-only agent
         return env
 
     def command(self, candidate, probe, ctx, prompt, attempt_dir):
@@ -416,7 +539,7 @@ class Router:
         started = self.clock()
         # cwd is the run-local attempt folder, never the repository: harness side effects (MCP/indexer caches)
         # cannot dirty the candidate, and repository-controlled harness config/hooks are not loaded.
-        res = self.runner(argv, cwd=attempt_dir, env=self.child_env(candidate['harness']), timeout=self.timeout)
+        res = self.runner(argv, cwd=attempt_dir, env=self.child_env(candidate['harness'], ctx), timeout=self.timeout)
         redact = ctx['redact']
         write_text(os.path.join(attempt_dir, 'stdout.log'), redact(res['stdout'] or ''))
         write_text(os.path.join(attempt_dir, 'stderr.log'), redact(res['stderr'] or ''))
@@ -498,6 +621,8 @@ class Router:
                     'one_model_per_review': True}
         attempts_root = os.path.join(ctx['review_dir'], 'attempts')
         failed_keys = set()
+        opencode_escape = None  # computed once per route(): a full sandbox walk is expensive
+        opencode_checked = False
         number = len(os.listdir(attempts_root)) if os.path.isdir(attempts_root) else 0
         for candidate in list(PREFERRED) + [session_cand]:
             record = {'priority': candidate['priority'], 'harness': candidate['harness'], 'model': candidate['model'],
@@ -517,13 +642,24 @@ class Router:
                     record.update(status=UNAVAILABLE, reason='same model/harness/effort already failed definitively '
                                   'in this review; not repeated')
                     continue
-            probe = self.probe(candidate, ctx['reviews_dir'], ctx['review_id'])
+            escaping = None
+            if candidate['harness'] == 'opencode':
+                if not opencode_checked:
+                    opencode_escape = symlink_escape(sandbox_dirs(ctx))
+                    opencode_checked = True
+                escaping = opencode_escape
+            if escaping:  # lexical permissions cannot contain a link that points outside: fail closed
+                probe = {'status': UNAVAILABLE, 'usage': 'n/a',
+                         'checks': ['symlink check: %s' % escaping], 'reason': escaping}
+            else:
+                probe = self.probe(candidate, ctx['reviews_dir'], ctx['review_id'])
             record.update(status=probe['status'], usage=probe['usage'], reason=probe['reason'],
                           checks=probe['checks'], resets_at=probe.get('resets_at'),
                           resolved_model=probe.get('resolved_model'))
             if probe['status'] in (EXHAUSTED, UNAVAILABLE):
                 failed_keys.add(candidate_key(candidate))
-                if not probe['reason'].startswith('cached') and not candidate.get('session'):
+                # A symlink hazard is re-checked next time: fixing the link makes the route usable again.
+                if (not probe['reason'].startswith(('cached', 'symlink')) and not candidate.get('session')):
                     hold = (to_epoch(probe.get('resets_at')) or self.clock() + EXHAUSTED_HOLD
                             if probe['status'] == EXHAUSTED else self.clock() + UNAVAILABLE_HOLD)
                     self.remember(ctx['reviews_dir'], candidate, probe['status'], probe['reason'], ctx['review_id'], hold)
