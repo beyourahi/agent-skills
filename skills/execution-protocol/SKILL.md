@@ -30,7 +30,9 @@ description: 'Execution protocol to apply to the task it is attached to - 100% e
 
 ## 2. Risk tier (MUST, before planning; rules decide, not judgment)
 
-Write the tier and every matched trigger to `PLAN.md` in the evidence folder (step 3). When in doubt, pick the higher tier.
+DeepSeek sets the tier from the request and the code it will touch, and writes the tier and every matched trigger to `PLAN.md` in the evidence folder (step 3). When in doubt, pick the higher tier.
+
+**Tier re-check (MUST, before any review gate and again before merge):** re-apply the same rules to the actual diff (`git diff --stat` plus the changed paths and content), not to the request. If the diff touches any High area, changes behavior in a task marked Low, or matches a trigger not in `PLAN.md`, raise the tier, record why in `PLAN.md`, and run every gate the new tier requires (an Opus plan for Medium/High included, written from a fresh `facts.md`, and code realigned to it) before merging. A tier never goes down after planning.
 
 - **High:** touches auth, sessions, permissions, tenancy, payments, billing, webhooks, money, inventory, migrations, stored data, secrets, CI/CD, deploy, infrastructure or legal text.
 - **Medium:** ordinary product code that is not High.
@@ -68,7 +70,9 @@ RED → GREEN → REFACTOR for behavior changes, plus a regression test for ever
 | Medium | `review` | Opus, `--effort medium` (`high` if a trigger matched) |
 | High | `review` and `security` (separate fresh sessions) | Opus, `--effort high` |
 
-**Packet** (`EVID/packet-<gate>.md`): the gate name, the original request verbatim, the acceptance criteria from `PLAN.md`, the base and head SHA, and the full diff. NEVER include the implementer's summary, rationale or self-assessment, and never secrets or credentials (redact them from diffs and logs).
+**Packet** (`EVID/packet-<gate>.md`): the gate name, the claimed tier and triggers, the original request verbatim, the acceptance criteria from `PLAN.md`, the base and head SHA, and the full diff. NEVER include the implementer's summary, rationale or self-assessment, and never secrets or credentials (redact them from diffs and logs).
+
+**Every reviewer, including the Low DeepSeek reviewer, also checks the claimed tier against the diff.** An under-classified tier is an `important` finding: the gate fails, and the work re-enters at the correct tier.
 
 **Opus command** (run from the task worktree; `<gate>` is `plan`, `review` or `security`; `<effort>`: `medium` for Medium, `high` for High or a matched trigger):
 
@@ -97,7 +101,7 @@ claude -p --model claude-opus-5-5 --effort <effort> \
 
 Commit, push, and open one PR per workstream; the PR body states the tier, triggers, and links each passing gate file. Merge only when all of these hold:
 
-1. Every gate required by the tier has a passing file named for the current head SHA (`git rev-parse HEAD` equals that SHA).
+1. The tier re-check (step 2) has run on the final diff, and every gate required by the resulting tier has a passing file named for the current head SHA (`git rev-parse HEAD` equals that SHA).
 2. CI is green on that same SHA.
 3. Repo rules and branch protection are satisfied.
 
