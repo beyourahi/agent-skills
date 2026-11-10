@@ -15,6 +15,7 @@ rsync -a --exclude '__pycache__/' --exclude 'graft/.cache/' skills/<name>/ ~/.ag
 ```text
 skills/consolidate/               SKILL.md, routing.json (plan/review prompt profiles)
 skills/dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
+skills/execution-protocol/        SKILL.md, opus-gate-brief.md, plan-schema.json, review-schema.json, agents/
 skills/frontend-ui-ux-overhaul/   SKILL.md, routing.json
 skills/sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```
