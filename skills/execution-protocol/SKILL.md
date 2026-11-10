@@ -24,8 +24,9 @@ description: 'Execution protocol to apply to the task it is attached to - 100% e
 - **DeepSeek** does everything except the Opus gates: investigation, Low/Medium plans, all code, tests, debugging, fixes, conflict resolution, git, PR, CI, merge, cleanup.
 - **Opus** never writes or edits code, tests or fixes, never runs git mutations, never merges. It returns a plan or findings only.
 - **Start check (MUST):** identify your own model. If you are DeepSeek V4.1 Flash High, you are the conductor: follow every step yourself. If you are any other model (including Opus) in any harness, you are not the conductor: never write code, tests or fixes yourself; run each implementation step as DeepSeek with `opencode run --model opencode-go/deepseek-v4.1-flash#high --format json` in the task worktree (continue its session with `-s <id>`), and run Opus gates with the step 7 command. If you cannot run either CLI, stop and say so.
-- **Unavailable models:** DeepSeek down or out of quota → the task is blocked; report it (Opus never implements). Opus down or out of plan limits → every Opus gate is blocked; finish all other work, never merge past a blocked gate, never substitute DeepSeek for an Opus gate.
-- **Claude account:** use the account `claude` is already signed in with. Never switch, rotate or add accounts, never use API keys or extra usage, never configure OpenCode's Anthropic provider with subscription OAuth.
+- **Unavailable models:** DeepSeek down or out of quota → the task is blocked; report it (Opus never implements). Opus down or out of plan limits on every account → every Opus gate is blocked; finish all other work, never merge past a blocked gate, never substitute DeepSeek for an Opus gate.
+- **Claude accounts (Rahi 2026-11-10):** Opus gates may rotate between Rahi's Claude Pro accounts with the installed claude-swap (`cswap`), only as step 7 says; it uses Rahi's own `cswap` settings (thresholds, priorities, disabled accounts). Never add, remove or edit accounts or `cswap` settings, never use API-key accounts (`--include-api-key-accounts`), extra usage or new spend, and never configure OpenCode's Anthropic provider with subscription OAuth. If `cswap` is missing, skip rotation and use the signed-in account.
+- **Opus out of quota** means every account is exhausted (`cswap` exit 3, or the retry below also hits a limit).
 - Report every model used, per gate, with session id and usage.
 
 ## 2. Risk tier (MUST, before planning; rules decide, not judgment)
@@ -87,6 +88,12 @@ claude -p --model claude-opus-5-5 --effort <effort> \
   --output-format json --json-schema "$(cat "$SKILL/<plan|review>-schema.json")" \
   < "$EVID/packet-<gate>.md" > "$EVID/<gate>-<head-sha>.json"
 ```
+
+**Account rotation (around every Opus call):**
+1. Before the call: `cswap auto --once --model Opus --json` (skip if `cswap` is absent). Exit 0 = switched, 2 = no change: continue. Exit 1 = error: retry once after ~30 s, then continue on the current account. Exit 3 = all accounts exhausted: the gate is blocked.
+2. If the call fails on a usage limit (`is_error` true and the result mentions a usage or rate limit): run `cswap switch --strategy next-available --json`, then rerun the same call once. A second limit failure, or no available account, blocks the gate. Never loop.
+3. Run Opus calls one at a time while rotating, so two gates never switch accounts at once. A `--resume` of a reviewer session after a switch may fail; then start a fresh session with the full packet.
+4. Log the account number (never the email) used for each call in `EVID/gates.log`.
 
 `plan` uses `plan-schema.json`; `review` and `security` use `review-schema.json`. A run passes only when the command exits 0, `is_error` is false, `structured_output` is present, and `modelUsage` names `claude-opus-5-5`. Otherwise the gate has not run: retry once, then treat Opus as unavailable (step 1).
 
