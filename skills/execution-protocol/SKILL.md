@@ -61,7 +61,7 @@ Never commit to main. One branch and worktree per workstream, cut from the lates
 
 **Changes outside a repository** (global or user settings, permissions and allow-rules, hooks, policy and instruction files, skills, MCP or harness config, shell profiles, credential config): the same tiers and gates apply; there is just no PR.
 - Tier them by the step 2 rules. Permissions, allow-rules, hooks, routing/policy, secrets and credential config are always **High**.
-- Never edit the live file first. Back it up to `EVID/backup/`, write the change to a copy, save `EVID/outside-<name>.diff` (backup → copy), and gate that diff exactly as step 7 says (packet = request + criteria + the diff; the file name uses the diff's `shasum -a 256` in place of a head SHA).
+- Never edit the live file first. Back it up to `EVID/backup/`, write the change to a copy, save `EVID/outside-<name>.diff` (backup → copy), and gate that diff exactly as step 7 says (the usual packet, with the diff's sha256 in place of base/head SHA; the file name uses the diff's `shasum -a 256` in place of a head SHA).
 - Apply the copy only after the gate passes, then verify the tool still loads it (e.g. its own doctor/validate command). On a failed gate or a broken load, restore the backup.
 - List every outside change, its tier, gate file and verification in the step 10 report.
 
@@ -77,7 +77,7 @@ RED → GREEN → REFACTOR for behavior changes, plus a regression test for ever
 | Medium | `review` | Opus, `--effort medium` (`high` if a trigger matched) |
 | High | `review` and `security` (separate fresh sessions) | Opus, `--effort high` |
 
-**Packet** (`EVID/packet-<gate>.md`): the gate name, the claimed tier and triggers, the original request verbatim, the acceptance criteria from `PLAN.md`, the base and head SHA, and the full diff. NEVER include the implementer's summary, rationale or self-assessment, and never secrets or credentials (redact them from diffs and logs).
+**Packet** (`EVID/packet-<gate>.md`): the gate name, the claimed tier and triggers, the original request verbatim, the acceptance criteria from `PLAN.md`, the full 40-character base and head SHA (or the diff's sha256 for an outside-repo change), and the full diff. NEVER include the implementer's summary, rationale or self-assessment, and never secrets or credentials (redact them from diffs and logs).
 
 **Every reviewer, including the Low DeepSeek reviewer, also checks the claimed tier against the diff.** An under-classified tier is an `important` finding: the gate fails, and the work re-enters at the correct tier.
 
@@ -104,7 +104,7 @@ claude -p --model claude-opus-5-5 --effort <effort> \
 `plan` uses `plan-schema.json`; `review` and `security` use `review-schema.json`. A run passes only when the command exits 0, `is_error` is false, `structured_output` is present, and `modelUsage` names `claude-opus-5-5`. Otherwise the gate has not run: retry once, then treat Opus as unavailable (step 1).
 
 **Verdict rules:**
-- A gate passes only with `verdict: "pass"` and zero `important` findings, bound to the exact head SHA in the file name (full 40-character SHA, every tier, every round; never round-numbered names like `review-r2.json`).
+- A gate passes only with `verdict: "pass"` and zero `important` findings, bound to the exact head SHA in the file name and in its `head_sha` field (full 40-character commit SHA, every tier, every round; never round-numbered names like `review-r2.json`). Outside-repo gates use the diff's 64-character sha256 instead.
 - `important` findings are fixed by DeepSeek, then re-verified (step 6), then re-reviewed on the delta only: `claude -p --resume <session_id>` with the same flags and a packet holding the new diff. A finding is dropped only when the reviewer accepts the written reason.
 - Any new commit after a pass invalidates it; re-review the delta for the new head.
 - At most 3 rounds per gate. After round 3, stop, rethink the approach, and report.
@@ -117,19 +117,19 @@ Commit, push, and open one PR per workstream; the PR body states the tier, trigg
 1. The tier re-check (step 2) has run on the final diff, and every gate required by the resulting tier has a passing file named for the current head SHA (`git rev-parse HEAD` equals that SHA).
 2. CI is green on that same SHA.
 3. Repo rules and branch protection are satisfied.
-4. **The pre-merge check below exits 0, and its output is pasted in the PR body.** Run it from the task worktree; `GATES` lists the gates the final tier requires (`review` for Low/Medium, `review security` for High). If it fails, do not merge: produce the missing file by actually running the step, never by writing or renaming a file by hand.
+4. **The pre-merge check below exits 0, and its output is pasted in the PR body.** Run it from the task worktree; `GATES` lists the gates the final tier requires (`(review)` for Low/Medium, `(review security)` for High). If it fails, do not merge: produce the missing file by actually running the step, never by writing or renaming a file by hand. Saving a reviewer's own JSON object from its run output (the Low gate) is part of running the step, not hand-writing.
 
 ```sh
-H=$(git rev-parse HEAD); GATES="review"   # "review security" for High
+H=$(git rev-parse HEAD); GATES=(review)   # (review security) for High; works in bash and zsh
 test -s "$EVID/tier-recheck-$H.md" || { echo "MISSING tier-recheck-$H.md"; exit 1; }
-for g in $GATES; do python3 - "$EVID/$g-$H.json" "$H" <<'EOF' || exit 1
+for g in "${GATES[@]}"; do python3 - "$EVID/$g-$H.json" "$H" "$g" <<'EOF' || exit 1
 import json, sys
-path, head = sys.argv[1], sys.argv[2]
+path, head, gate = sys.argv[1], sys.argv[2], sys.argv[3]
 try: d = json.load(open(path))
 except Exception as e: sys.exit(f"MISSING/INVALID {path}: {e}")
 o = d.get("structured_output", d)
 sha = str(o.get("head_sha", ""))
-ok = o.get("verdict") == "pass" and len(sha) >= 7 and head.startswith(sha) \
+ok = o.get("gate") == gate and o.get("verdict") == "pass" and sha == head \
      and not any(f.get("severity") == "important" for f in o.get("findings", []))
 print(("PASS " if ok else "FAIL ") + path); sys.exit(0 if ok else 1)
 EOF
