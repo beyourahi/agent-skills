@@ -15,6 +15,7 @@ rsync -a --exclude '__pycache__/' --exclude 'graft/.cache/' skills/<name>/ ~/.ag
 ```text
 skills/consolidate/               SKILL.md, routing.json (plan/review prompt profiles)
 skills/dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
+skills/execution-protocol/        SKILL.md, opus-gate-brief.md, plan-schema.json, review-schema.json, agents/
 skills/frontend-ui-ux-overhaul/   SKILL.md, routing.json
 skills/sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```
@@ -23,7 +24,8 @@ skills/sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 
 - `skills/dependency-upgrade/scripts/routed_task.py` resolves sibling skills as
   `<parent>/<skill>/routing.json`. `consolidate` and `frontend-ui-ux-overhaul` depend on that, so
-  the four folders stay siblings and keep their names.
+  the three routing folders (`dependency-upgrade`, `consolidate`, `frontend-ui-ux-overhaul`) stay
+  siblings and keep their names. No other skill takes part in routing.
 - `SKILL.md` frontmatter keeps `name` and `description`; `dependency-upgrade` also declares
   `allowed-tools`, `license` and `disable-model-invocation`.
 - Python helpers are stdlib-only and must run on 3.9+.
