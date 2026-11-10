@@ -33,7 +33,7 @@ description: 'Execution protocol to apply to the task it is attached to - 100% e
 
 DeepSeek sets the tier from the request and the code it will touch, and writes the tier and every matched trigger to `PLAN.md` in the evidence folder (step 3). When in doubt, pick the higher tier.
 
-**Tier re-check (MUST, before any review gate and again before merge):** re-apply the same rules to the actual diff (`git diff --stat` plus the changed paths and content), not to the request. If the diff touches any High area, changes behavior in a task marked Low, or matches a trigger not in `PLAN.md`, raise the tier, record why in `PLAN.md`, and run every gate the new tier requires (an Opus plan for Medium/High included, written from a fresh `facts.md`, and code realigned to it) before merging. A tier never goes down after planning.
+**Tier re-check (MUST, before any review gate and again before merge):** re-apply the same rules to the actual diff (`git diff --stat` plus the changed paths and content), not to the request. If the diff touches any High area, changes behavior in a task marked Low, or matches a trigger not in `PLAN.md`, raise the tier, record why in `PLAN.md`, and run every gate the new tier requires (an Opus plan for Medium/High included, written from a fresh `facts.md`, and code realigned to it) before merging. A tier never goes down after planning. Write each re-check to `EVID/tier-recheck-<head-sha>.md` (full 40-character SHA): the `git diff --stat`, every changed path, each tier rule checked with its result, and the resulting tier.
 
 - **High:** touches auth, sessions, permissions, tenancy, payments, billing, webhooks, money, inventory, migrations, stored data, secrets, CI/CD, deploy, infrastructure or legal text.
 - **Medium:** ordinary product code that is not High.
@@ -59,6 +59,12 @@ Check the latest official docs for every command, config, API and version you re
 
 Never commit to main. One branch and worktree per workstream, cut from the latest default branch. One owner per file set. Run independent work in parallel as separate processes, scaled to quota and machine; dependent work in order. Read-only research needs no worktree.
 
+**Changes outside a repository** (global or user settings, permissions and allow-rules, hooks, policy and instruction files, skills, MCP or harness config, shell profiles, credential config): the same tiers and gates apply; there is just no PR.
+- Tier them by the step 2 rules. Permissions, allow-rules, hooks, routing/policy, secrets and credential config are always **High**.
+- Never edit the live file first. Back it up to `EVID/backup/`, write the change to a copy, save `EVID/outside-<name>.diff` (backup → copy), and gate that diff exactly as step 7 says (packet = request + criteria + the diff; the file name uses the diff's `shasum -a 256` in place of a head SHA).
+- Apply the copy only after the gate passes, then verify the tool still loads it (e.g. its own doctor/validate command). On a failed gate or a broken load, restore the backup.
+- List every outside change, its tier, gate file and verification in the step 10 report.
+
 ## 6. Build test-first and verify locally
 
 RED → GREEN → REFACTOR for behavior changes, plus a regression test for every bug fix. Match repo conventions; no unrelated changes. Then run the repo's own lint, type check, tests and build, plus E2E/UI checks when affected. All MUST pass before any review gate. Never skip hooks, delete tests or loosen gates.
@@ -67,7 +73,7 @@ RED → GREEN → REFACTOR for behavior changes, plus a regression test for ever
 
 | Tier | Gate(s) | Reviewer |
 |---|---|---|
-| Low | `review` | Fresh DeepSeek session: `opencode run --agent plan --model opencode-go/deepseek-v4.1-flash#high --format json "$(cat "$EVID/packet-review.md")"` (read-only agent, new session, never the implementer's) |
+| Low | `review` | Fresh DeepSeek session: `opencode run --agent plan --model opencode-go/deepseek-v4.1-flash#high --format json "$(cat "$EVID/packet-review.md")"` (read-only agent, new session, never the implementer's). The packet ends by asking for one final JSON object matching `review-schema.json`; save that object alone to `EVID/review-<head-sha>.json`. |
 | Medium | `review` | Opus, `--effort medium` (`high` if a trigger matched) |
 | High | `review` and `security` (separate fresh sessions) | Opus, `--effort high` |
 
@@ -98,7 +104,7 @@ claude -p --model claude-opus-5-5 --effort <effort> \
 `plan` uses `plan-schema.json`; `review` and `security` use `review-schema.json`. A run passes only when the command exits 0, `is_error` is false, `structured_output` is present, and `modelUsage` names `claude-opus-5-5`. Otherwise the gate has not run: retry once, then treat Opus as unavailable (step 1).
 
 **Verdict rules:**
-- A gate passes only with `verdict: "pass"` and zero `important` findings, bound to the exact head SHA in the file name.
+- A gate passes only with `verdict: "pass"` and zero `important` findings, bound to the exact head SHA in the file name (full 40-character SHA, every tier, every round; never round-numbered names like `review-r2.json`).
 - `important` findings are fixed by DeepSeek, then re-verified (step 6), then re-reviewed on the delta only: `claude -p --resume <session_id>` with the same flags and a packet holding the new diff. A finding is dropped only when the reviewer accepts the written reason.
 - Any new commit after a pass invalidates it; re-review the delta for the new head.
 - At most 3 rounds per gate. After round 3, stop, rethink the approach, and report.
@@ -111,6 +117,24 @@ Commit, push, and open one PR per workstream; the PR body states the tier, trigg
 1. The tier re-check (step 2) has run on the final diff, and every gate required by the resulting tier has a passing file named for the current head SHA (`git rev-parse HEAD` equals that SHA).
 2. CI is green on that same SHA.
 3. Repo rules and branch protection are satisfied.
+4. **The pre-merge check below exits 0, and its output is pasted in the PR body.** Run it from the task worktree; `GATES` lists the gates the final tier requires (`review` for Low/Medium, `review security` for High). If it fails, do not merge: produce the missing file by actually running the step, never by writing or renaming a file by hand.
+
+```sh
+H=$(git rev-parse HEAD); GATES="review"   # "review security" for High
+test -s "$EVID/tier-recheck-$H.md" || { echo "MISSING tier-recheck-$H.md"; exit 1; }
+for g in $GATES; do python3 - "$EVID/$g-$H.json" "$H" <<'EOF' || exit 1
+import json, sys
+path, head = sys.argv[1], sys.argv[2]
+try: d = json.load(open(path))
+except Exception as e: sys.exit(f"MISSING/INVALID {path}: {e}")
+o = d.get("structured_output", d)
+sha = str(o.get("head_sha", ""))
+ok = o.get("verdict") == "pass" and len(sha) >= 7 and head.startswith(sha) \
+     and not any(f.get("severity") == "important" for f in o.get("findings", []))
+print(("PASS " if ok else "FAIL ") + path); sys.exit(0 if ok else 1)
+EOF
+done
+```
 
 Then squash-merge. Combined work: integrate onto the latest main, retest, and re-gate the combined diff before merging. If the repo auto-deploys, check production health afterwards.
 
