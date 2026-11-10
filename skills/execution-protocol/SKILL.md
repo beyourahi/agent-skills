@@ -1,6 +1,6 @@
 ---
 name: execution-protocol
-description: 'Execution protocol to apply to the task it is attached to - 100% end-to-end completion, strict two-model routing (DeepSeek V4.1 Flash High conducts and implements in OpenCode; Opus 5.5 only at hard gates via claude -p), risk tiers, Opus-owned plans for risky work, test-first, local checks, mandatory review gates bound to the head SHA, PR + CI delivery, cleanup, brief report. Always on (Rahi 2026-11-09): apply it to every development task in every session, whether or not the user invokes it.'
+description: 'Execution protocol to apply to the task it is attached to - 100% end-to-end completion, strict two-model routing (DeepSeek V4.1 Flash High conducts and implements in OpenCode; Opus 5.5 only at hard gates via claude -p), risk tiers, Opus-owned plans for every Medium and High task, test-first, local checks, mandatory review gates bound to the head SHA, PR + CI delivery, cleanup, brief report. Always on (Rahi 2026-11-09): apply it to every development task in every session, whether or not the user invokes it.'
 ---
 
 ## Execution protocol (applies to the task it accompanies, before or after it)
@@ -35,18 +35,18 @@ Write the tier and every matched trigger to `PLAN.md` in the evidence folder (st
 - **High:** touches auth, sessions, permissions, tenancy, payments, billing, webhooks, money, inventory, migrations, stored data, secrets, CI/CD, deploy, infrastructure or legal text.
 - **Medium:** ordinary product code that is not High.
 - **Low:** docs, comments, copy, config typos, or a small isolated change with no behavior change.
-- **Opus triggers** (raise Medium to the Opus-plan path): a new dependency; a public API, schema or contract change; a plan touching more than ~8 files or more than one package; review round 2 still disputed.
+- **Opus triggers** (raise a Medium task's Opus plan and review effort to `high`): a new dependency; a public API, schema or contract change; a plan touching more than ~8 files or more than one package; review round 2 still disputed.
 
 ## 3. Plan (who writes it depends on tier)
 
 Evidence folder for every task: `~/.local/state/dev-evidence/<task>/` (`EVID` below). Save `PLAN.md` and `PROGRESS.md` there so work survives interruptions.
 
-- **Low, and Medium without a trigger:** DeepSeek writes the plan: acceptance criteria, files, tests, safeguards.
-- **High, or Medium with a trigger: Opus owns the plan.** Opus is not shown a DeepSeek plan, so it cannot anchor on one.
+- **Low:** DeepSeek writes the plan: acceptance criteria, files, tests, safeguards.
+- **Medium and High (Rahi 2026-11-10): Opus owns the plan.** Opus is not shown a DeepSeek plan, so it cannot anchor on one.
   1. DeepSeek writes `EVID/facts.md`: the request verbatim, repo rules that apply, relevant files with `file:line`, current behavior, existing patterns, constraints, open questions. Facts only: no proposed solution, design or preference.
   2. Opus gate `plan` (step 7 command, packet `EVID/packet-plan.md` = gate name, tier and the full `facts.md`; effort per tier) reads the packet plus the repo and returns the plan: acceptance criteria, design, file list, tests, risks, rollback.
   3. DeepSeek saves it as `PLAN.md` and follows it exactly. A needed deviation goes back to Opus (`--resume` its session with the reason) before any code changes.
-- Acceptance criteria are fixed before code is written. Later changes to them need the same author (DeepSeek for Low/Medium, Opus for the Opus-plan path).
+- Acceptance criteria are fixed before code is written. Later changes to them need the same author (DeepSeek for Low, Opus for Medium and High).
 
 ## 4. Current docs and tools
 
@@ -65,12 +65,12 @@ RED → GREEN → REFACTOR for behavior changes, plus a regression test for ever
 | Tier | Gate(s) | Reviewer |
 |---|---|---|
 | Low | `review` | Fresh DeepSeek session: `opencode run --agent plan --model opencode-go/deepseek-v4.1-flash#high --format json "$(cat "$EVID/packet-review.md")"` (read-only agent, new session, never the implementer's) |
-| Medium | `review` | Opus, `--effort medium` |
+| Medium | `review` | Opus, `--effort medium` (`high` if a trigger matched) |
 | High | `review` and `security` (separate fresh sessions) | Opus, `--effort high` |
 
 **Packet** (`EVID/packet-<gate>.md`): the gate name, the original request verbatim, the acceptance criteria from `PLAN.md`, the base and head SHA, and the full diff. NEVER include the implementer's summary, rationale or self-assessment, and never secrets or credentials (redact them from diffs and logs).
 
-**Opus command** (run from the task worktree; `<gate>` is `plan`, `review` or `security`; `<effort>` per tier):
+**Opus command** (run from the task worktree; `<gate>` is `plan`, `review` or `security`; `<effort>`: `medium` for Medium, `high` for High or a matched trigger):
 
 ```sh
 SKILL=~/.agents/skills/execution-protocol
