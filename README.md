@@ -31,7 +31,9 @@ skills/
 `consolidate` and `frontend-ui-ux-overhaul` delegate their planning and review tasks to
 `dependency-upgrade/scripts/routed_task.py` and read their prompt profiles from their own
 `routing.json`. The router resolves each profile as `<skills-root>/<skill>/routing.json`, so keep
-the five folders as siblings under one skills root; splitting or renaming them breaks routing.
+those three routing folders (`dependency-upgrade`, `consolidate`, `frontend-ui-ux-overhaul`) as
+siblings under one skills root; splitting or renaming them breaks routing. The other skills do not
+take part in routing.
 
 ## Install
 
@@ -60,6 +62,8 @@ python3 ~/.agents/skills/dependency-upgrade/admin/depup-admin.py doctor
 ```
 
 Requirements: git and Python 3.9+ (`sync-agent-instructions` needs Python 3 only).
+`execution-protocol` also needs the `opencode` CLI (OpenCode Go, model
+`opencode-go/deepseek-v4.1-flash#high`) and the official `claude` CLI, signed in.
 
 ## Usage
 
