@@ -13,7 +13,7 @@ workflow repository, not a supported product.
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`consolidate`](skills/consolidate/)                         | Gets every unfinished branch, worktree, clone, stash and PR into `main`, verifies the result, then removes the rest once you approve.                                                                |
 | [`dependency-upgrade`](skills/dependency-upgrade/)           | Upgrades a repository's dependencies end to end in an isolated worktree: research, plan, migrate, test, review, verify, deliver.                                                                     |
-| [`execution-protocol`](skills/execution-protocol/)           | Applies an always-on protocol to every development task: strict two-model routing (DeepSeek conducts and implements, Opus 5.5 authors every Medium and High plan and reviews via `claude -p`), merge bound to the head SHA. |
+| [`execution-protocol`](skills/execution-protocol/)           | Applies an always-on protocol to every development task: strict two-model routing (DeepSeek conducts and implements, Opus 5.5 authors every Medium and High plan and reviews via `claude -p`), lanes in fresh OpenCode sessions, gates through `scripts/gate.sh` and merges through `scripts/premerge-and-merge.sh`, bound to the head SHA. |
 | [`frontend-ui-ux-overhaul`](skills/frontend-ui-ux-overhaul/) | Audits and implements repository-wide frontend, responsive, accessibility, motion and design-system improvements.                                                                                    |
 | [`sync-agent-instructions`](skills/sync-agent-instructions/) | Rewrites a repository's `AGENTS.md` from past sessions, git history and the code, keeping `CLAUDE.md` as an `@AGENTS.md` import.                                                                     |
 
@@ -23,7 +23,8 @@ workflow repository, not a supported product.
 skills/
 ├── consolidate/               SKILL.md, routing.json
 ├── dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
-├── execution-protocol/        SKILL.md, opus-gate-brief.md, plan-schema.json, review-schema.json, agents/
+├── execution-protocol/        SKILL.md, opus-gate-brief.md, opencode-gate.json, plan-schema.json, review-schema.json,
+│                              agents/, scripts/ (gate.sh, premerge-and-merge.sh), tests/smoke.sh
 ├── frontend-ui-ux-overhaul/   SKILL.md, routing.json
 └── sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```
@@ -63,9 +64,10 @@ python3 ~/.agents/skills/dependency-upgrade/admin/depup-admin.py doctor
 
 Requirements: git and Python 3.9+ (`sync-agent-instructions` needs Python 3 only).
 `execution-protocol` also needs the `opencode` CLI (OpenCode Go, model
-`opencode-go/deepseek-v4.1-flash#high`) and the official `claude` CLI, signed in. It optionally uses
-`claude-swap` (`cswap`), if installed, to rotate Opus gates between your signed-in Claude accounts
-when one runs out of quota; without it the gates use the account `claude` is signed in with.
+`opencode-go/deepseek-v4.1-flash#high`), the official `claude` CLI and `gh`, both signed in, and
+`python3`. It optionally uses `claude-swap` (`cswap`), if installed, to rotate Opus gates between
+your signed-in Claude accounts when one runs out of quota; without it the gates use the account
+`claude` is signed in with.
 
 ## Usage
 
@@ -85,6 +87,7 @@ read-only plan instead. Details and harness notes are in its
 
 ```sh
 python3 -m unittest discover -s skills/dependency-upgrade/tests -t skills/dependency-upgrade
+bash skills/execution-protocol/tests/smoke.sh
 ```
 
 ## License
