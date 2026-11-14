@@ -63,12 +63,12 @@ python3 ~/.agents/skills/dependency-upgrade/admin/depup-admin.py install
 python3 ~/.agents/skills/dependency-upgrade/admin/depup-admin.py doctor
 ```
 
-Requirements: git, `gh` (signed in) and Python 3.9+ (`sync-agent-instructions` needs Python 3 only).
-`execution-protocol` also needs the `claude` CLI (signed in), the `opencode` CLI (OpenCode Go, model
-`opencode-go/deepseek-v4.1-flash#high`) and `python3`; on macOS, `scripts/implement.sh` adds
-`sandbox-exec` and `timeout`. It optionally uses `claude-swap` (`cswap`), if installed, to rotate
-Opus gates between your signed-in Claude accounts when one runs out of quota; without it the gates
-use the account `claude` is signed in with.
+Requirements: git and Python 3.9+ (`sync-agent-instructions` needs Python 3 only).
+`execution-protocol` also needs the `claude` CLI (signed in), `gh` (signed in), the `opencode` CLI
+(OpenCode Go, model `opencode-go/deepseek-v4.1-flash#high`) and `python3`; on macOS,
+`scripts/implement.sh` adds `sandbox-exec` and `timeout`. It optionally uses `claude-swap`
+(`cswap`), if installed, to rotate Opus gates between your signed-in Claude accounts when one runs
+out of quota; without it the gates use the account `claude` is signed in with.
 
 ## Usage
 
