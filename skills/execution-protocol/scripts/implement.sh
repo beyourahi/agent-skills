@@ -43,14 +43,19 @@ H=$(cd "$HOME" && pwd -P); EVROOT=$H/.local/state/dev-evidence
 inside() { case $1 in "$2"|"$2"/*) return 0 ;; esac; return 1; }
 if inside "$H" "$WT" || inside "$WT" "$EVROOT" || inside "$EVROOT" "$WT"; then die "refusing worktree $WT: it is HOME or its ancestor, or overlaps the evidence root"; fi
 # reap: stop every process whose cwd is in the worktree or under it; fails closed (exit 6).
-RT=""; RM=""; RE=""; TAINT=0
+RT=""; RM=""; RE=""; TAINT=0; BASE=""
 reap() { REAPED=$(cd / && py reap "$WT" "$$"); }
-tainted() { TAINT=1; if [ -n "$RT" ]; then py row "$EVID" "$step" "${round:-0}" "${ps:-}" "$tier" "$RT" "$RM" "$RE" failed "worktree processes survived: $REAPED" "${SID:--}" 0 0 0
-  else py row "$EVID" "$step" 0 "" "" "" "" "" discarded "worktree processes survived: $REAPED" "" 0 0 0; fi
-  printf 'implement.sh: worktree processes survived (%s). The worktree %s is tainted: read, run, bootstrap or commit nothing from it; from the main checkout run git worktree remove --force %s, never reuse that path, and continue in a fresh worktree.\n' "$REAPED" "$WT" "$WT" >&2; exit 6; }
+tainted() { TAINT=1; local why=${1:-worktree processes survived: $REAPED}; if [ -n "$RT" ]; then py row "$EVID" "$step" "${round:-0}" "${ps:-}" "$tier" "$RT" "$RM" "$RE" failed "$why" "${SID:--}" 0 0 0
+  else py row "$EVID" "$step" 0 "" "" "" "" "" discarded "$why" "" 0 0 0; fi
+  printf 'implement.sh: %s. The worktree %s is tainted: read, run, bootstrap or commit nothing from it; from the main checkout run git worktree remove --force %s, never reuse that path, and continue in a fresh worktree.\n' "$why" "$WT" "$WT" >&2; exit 6; }
 bootstrap() { [ "$boot" = none ] && return 0; (cd "$WT" && bash -c "$boot") >> "$EVID/impl-bootstrap.log" 2>&1 && return 0
   printf 'implement.sh: bootstrap failed (see %s); the worktree is reset but not set up\n' "$EVID/impl-bootstrap.log" >&2; return 1; }
-discard() { reap || tainted; rm -rf "$WT/.impl"; git -C "$WT" reset --hard -q; [ -z "${BASE:-}" ] || git -C "$WT" checkout -q --detach "$BASE"; git -C "$WT" clean -ffdxq; bootstrap; }
+discard() { reap || tainted; rm -rf "$WT/.impl"
+  if [ -z "$BASE" ]; then git -C "$WT" reset --hard -q || tainted "reset failed"; git -C "$WT" clean -ffdxq; bootstrap; return; fi
+  git -C "$WT" reset --hard -q || tainted "restore to BASE failed"
+  git -C "$WT" checkout -q -f --detach "$BASE" || tainted "restore to BASE failed"; git -C "$WT" clean -ffdxq
+  [ "$(git -C "$WT" rev-parse HEAD)" = "$BASE" ] && [ -z "$(git -C "$WT" status --porcelain --untracked-files=all)" ] || tainted "restore to BASE failed"
+  bootstrap; }
 if [ "$mode" = discard ]; then discard; brc=$?; py row "$EVID" "$step" 0 "" "" "" "" "" discarded "--discard" "" 0 0 0
   printf 'implement.sh: worktree reset to HEAD\n'; exit $((brc ? 1 : 0)); fi
 [ -z "$(git status --porcelain --untracked-files=all)" ] || die "worktree is not clean; commit or discard changes first"

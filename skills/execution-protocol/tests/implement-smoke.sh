@@ -102,6 +102,9 @@ fcase "added skip marker" "echo \"it.skip('y', () => {})\" >> tests/a.test.js; $
 fcase "result.json is a symlink" "echo '{\"status\": \"done\"}' > '$T/res.json'; ln -s '$T/res.json' .impl/result.json"
 fresh; H0=$(git -C "$W" rev-parse HEAD); FAKE_ACTION="echo c > src/a.txt; git -c user.name=t -c user.email=t@e commit -qam x; $RES" im medium --bootstrap none
 chk "HEAD moved: failed, HEAD restored, clean, patch saved" bash -c "[ $IRC = 1 ] && tail -1 '$E/impl.log' | grep -q '\"status\": \"failed\", \"reason\": \"HEAD moved' && [ \"\$(git -C '$W' rev-parse HEAD)\" = '$H0' ] && [ -z \"\$(git -C '$W' status --porcelain --untracked-files=all)\" ] && grep -q src/a.txt '$E'/impl-*-discarded.patch"
+fresh; H0=$(git -C "$W" rev-parse HEAD); G=$(git -C "$W" rev-parse --git-dir); FAKE_ACTION="echo c > src/a.txt; git -c user.name=t -c user.email=t@e commit -qam x; touch \"\$(git rev-parse --git-dir)/index.lock\"; $RES" im medium --bootstrap none
+chk "restore failure: exit 6, restore to BASE failed" bash -c "[ $IRC = 6 ] && tail -1 '$E/impl.log' | grep -q '\"reason\": \"restore to BASE failed'"
+rm -f "$G/index.lock"; git -C "$W" checkout -q --detach "$H0"
 fresh; FAKE_ACTION='echo q > .impl/escalation.md; printf "{\"status\": \"escalate\"}" > .impl/result.json' im medium --bootstrap none
 chk "escalate: exit 5, escalation in EVID, clean" bash -c "[ $IRC = 5 ] && ls '$E'/escalation-*.md && [ -z \"\$(git -C '$W' status --porcelain)\" ]"
 fresh; FAKE_ACTION='printf "{\"status\": \"escalate\"}" > .impl/result.json' im medium --bootstrap none; chk "escalate without escalation.md: exit 1" test "$IRC" = 1
@@ -123,6 +126,8 @@ im medium --bootstrap none; chk "round cap: exit 4, no model call" bash -c "[ $I
 mkplan p2; FAKE_ACTION="$RES" im medium --bootstrap none; chk "a new plan restarts the rounds" test "$IRC" = 0
 fresh; echo '{"status": "start", "step": "main"}' >> "$E/impl.log"; echo junk > "$W/junk.txt"; im --discard --bootstrap "touch $T/boot2"
 chk "--discard: reset, bootstrap, discarded row" bash -c "[ $IRC = 0 ] && [ -z \"\$(git -C '$W' status --porcelain --untracked-files=all)\" ] && test -e '$T/boot2' && tail -1 '$E/impl.log' | grep -q '\"status\": \"discarded\"'"
+fresh; git -C "$R" -c user.name=t -c user.email=t@e commit -q --allow-empty -m other; H0=$(git -C "$W" rev-parse HEAD); BASE=$(git -C "$R" rev-parse HEAD) im --discard --bootstrap none
+chk "--discard ignores BASE from the environment" bash -c "[ $IRC = 0 ] && [ \"\$(git -C '$W' rev-parse HEAD)\" = '$H0' ]"
 FAKE_ACTION="$RES" im medium --bootstrap none; chk "after --discard the next call runs" test "$IRC" = 0
 DOK='{"route": "deepseek", "model": "opencode-go/deepseek-v4.1-flash", "effort": "high", "status": "done", "step": "s", "round": 1}'
 DUN='{"route": "deepseek", "model": "opencode-go/deepseek-v4.1-flash", "effort": "high", "status": "unavailable", "step": "s", "round": 2}'
