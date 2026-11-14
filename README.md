@@ -25,7 +25,7 @@ skills/
 ├── dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
 ├── execution-protocol/        SKILL.md, reference.md, opus-gate-brief.md, implementer-brief.md, plan-schema.json,
 │                              review-schema.json, agents/, opencode/, scripts/ (gate.sh, implement.sh,
-│                              implement_lib.py, implementer.sb, premerge-and-merge.sh), tests/ (smoke.sh, implement-smoke.sh)
+│                              implement_lib.py, premerge-and-merge.sh), tests/ (smoke.sh, implement-smoke.sh)
 ├── frontend-ui-ux-overhaul/   SKILL.md, routing.json
 └── sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```
@@ -65,8 +65,8 @@ python3 ~/.agents/skills/dependency-upgrade/admin/depup-admin.py doctor
 
 Requirements: git and Python 3.9+ (`sync-agent-instructions` needs Python 3 only).
 `execution-protocol` also needs the `claude` CLI (signed in), `gh` (signed in), the `opencode` CLI
-(OpenCode Go, model `opencode-go/deepseek-v4.1-flash#high`) and `python3`; on macOS,
-`scripts/implement.sh` adds `sandbox-exec` and `timeout`. It optionally uses `claude-swap`
+(OpenCode Go, model `opencode-go/deepseek-v4.1-flash#high`) and `python3`;
+`scripts/implement.sh` also needs `timeout` and `lsof`. It optionally uses `claude-swap`
 (`cswap`), if installed, to rotate Opus gates between your signed-in Claude accounts when one runs
 out of quota; without it the gates use the account `claude` is signed in with.
 
