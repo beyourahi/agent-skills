@@ -102,14 +102,14 @@ run_claude() { local rc=0; set +e
     --allowedTools "Read,Grep,Glob" --disallowedTools "Bash,Edit,Write,NotebookEdit,Agent,WebFetch,WebSearch" \
     --append-system-prompt "$(cat "$SKILL/opus-gate-brief.md")" --output-format json --json-schema "$(cat "$SKILL/$schema")" < "$packet" > "$out" 2>>"$errf"
   rc=$?; set -e; return $rc; }
-classify() { python3 -I - "$out" "$gate" "$key" "$1" <<'PY'
+classify() { python3 -I - "$out" "$gate" "$key" "$1" "$tier" <<'PY'
 import json, sys
-p, g, k, rc = sys.argv[1:5]
+p, g, k, rc, tr = sys.argv[1:6]
 try:
     d = json.load(open(p)); o = d.get("structured_output") or {}; mu = d.get("modelUsage") or {}
     t = next((v for x, v in mu.items() if "claude-opus-5-5" in x), {}) if isinstance(mu, dict) else {}
     e = bool(d.get("is_error")); r = str(d.get("result") or "").lower()
-    ok = rc == "0" and not e and isinstance(o, dict) and bool(o) and bool(t) and o.get("gate") == g and (g == "plan" or str(o.get("head_sha", "")) == k)
+    ok = rc == "0" and not e and isinstance(o, dict) and bool(o) and bool(t) and o.get("gate") == g and (g == "plan" or str(o.get("head_sha", "")) == k) and (g != "plan" or o.get("tier") == tr)
     v = ["ok" if ok else "limit" if e and ("limit" in r or "usage" in r) else "invalid", d.get("session_id", ""), t.get("inputTokens", 0), t.get("outputTokens", 0), d.get("total_cost_usd", 0), o.get("verdict", "")]
 except Exception: v = ["invalid", "", 0, 0, 0, ""]
 print("\n".join("%s=%s" % (n, " ".join(str(x).split())) for n, x in zip(["KIND", "SESSION", "INTOK", "OUTOK", "COST", "VERDICT"], v)))
