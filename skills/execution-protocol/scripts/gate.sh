@@ -97,27 +97,30 @@ if [ "$cap" = 2 ]; then log blocked "" "" "" "" "" 0 0 0 "" "round cap after re-
 if [ "$cap" = 1 ]; then log cap "" "" "" "" "" 0 0 0 "" "3 ok rounds reached; re-plan required" ""; exit 4; fi
 effort=medium; if [ "$gate" = plan ] || [ "$tier" = high ] || [ "$trigger" = 1 ]; then effort=high; fi
 if [ "$gate" = plan ]; then schema=plan-schema.json; else schema=review-schema.json; fi
-run_claude() { local rc=0; set +e
+run_claude() { local rc=0 ap; set +e
+  ap=$(cat "$SKILL/opus-gate-brief.md")
+  if [ "$gate" = plan ]; then ap+=$'\n'"Requested tier: $tier. Return exactly that value in \`tier\`; put any disagreement about the tier in risks or open_questions."; fi
   claude -p --model claude-opus-5-5 --effort "$1" --setting-sources "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --permission-mode dontAsk \
     --allowedTools "Read,Grep,Glob" --disallowedTools "Bash,Edit,Write,NotebookEdit,Agent,WebFetch,WebSearch" \
-    --append-system-prompt "$(cat "$SKILL/opus-gate-brief.md")" --output-format json --json-schema "$(cat "$SKILL/$schema")" < "$packet" > "$out" 2>>"$errf"
+    --append-system-prompt "$ap" --output-format json --json-schema "$(cat "$SKILL/$schema")" < "$packet" > "$out" 2>>"$errf"
   rc=$?; set -e; return $rc; }
-classify() { python3 -I - "$out" "$gate" "$key" "$1" <<'PY'
+classify() { python3 -I - "$out" "$gate" "$key" "$1" "$tier" <<'PY'
 import json, sys
-p, g, k, rc = sys.argv[1:5]
+p, g, k, rc, tr = sys.argv[1:6]
 try:
     d = json.load(open(p)); o = d.get("structured_output") or {}; mu = d.get("modelUsage") or {}
     t = next((v for x, v in mu.items() if "claude-opus-5-5" in x), {}) if isinstance(mu, dict) else {}
     e = bool(d.get("is_error")); r = str(d.get("result") or "").lower()
-    ok = rc == "0" and not e and isinstance(o, dict) and bool(o) and bool(t) and o.get("gate") == g and (g == "plan" or str(o.get("head_sha", "")) == k)
-    v = ["ok" if ok else "limit" if e and ("limit" in r or "usage" in r) else "invalid", d.get("session_id", ""), t.get("inputTokens", 0), t.get("outputTokens", 0), d.get("total_cost_usd", 0), o.get("verdict", "")]
-except Exception: v = ["invalid", "", 0, 0, 0, ""]
-print("\n".join("%s=%s" % (n, " ".join(str(x).split())) for n, x in zip(["KIND", "SESSION", "INTOK", "OUTOK", "COST", "VERDICT"], v)))
+    b = rc == "0" and not e and isinstance(o, dict) and bool(o) and bool(t) and o.get("gate") == g and (g == "plan" or str(o.get("head_sha", "")) == k)
+    ok = b and (g != "plan" or o.get("tier") == tr)
+    v = ["ok" if ok else "limit" if e and ("limit" in r or "usage" in r) else "invalid", d.get("session_id", ""), t.get("inputTokens", 0), t.get("outputTokens", 0), d.get("total_cost_usd", 0), o.get("verdict", ""), 1 if b and g == "plan" else 0]
+except Exception: v = ["invalid", "", 0, 0, 0, "", 0]
+print("\n".join("%s=%s" % (n, " ".join(str(x).split())) for n, x in zip(["KIND", "SESSION", "INTOK", "OUTOK", "COST", "VERDICT", "TIERBAD"], v)))
 PY
 }
 attempt() { local rc=0; if run_claude "$1"; then rc=0; else rc=$?; fi; classify "$rc" > "$EVID/$gate-$key.cls"
-  KIND=""; SESSION=""; INTOK=0; OUTOK=0; COST=0; VERDICT=""; while IFS='=' read -r k v; do case $k in KIND) KIND=$v;; SESSION) SESSION=$v;; INTOK) INTOK=$v;; OUTOK) OUTOK=$v;; COST) COST=$v;; VERDICT) VERDICT=$v;; esac; done < "$EVID/$gate-$key.cls"; rm -f "$EVID/$gate-$key.cls"
-  if [ "$KIND" != ok ]; then log invalid opus claude-opus-5-5 "$1" "$SESSION" "$account" "$INTOK" "$OUTOK" "$COST" "" "opus attempt: $KIND" ""; fi; }
+  KIND=""; SESSION=""; INTOK=0; OUTOK=0; COST=0; VERDICT=""; TIERBAD=0; while IFS='=' read -r k v; do case $k in KIND) KIND=$v;; SESSION) SESSION=$v;; INTOK) INTOK=$v;; OUTOK) OUTOK=$v;; COST) COST=$v;; VERDICT) VERDICT=$v;; TIERBAD) TIERBAD=$v;; esac; done < "$EVID/$gate-$key.cls"; rm -f "$EVID/$gate-$key.cls"
+  if [ "$KIND" != ok ]; then local why="opus attempt: $KIND"; if [ "$TIERBAD" = 1 ]; then why="plan tier mismatch (requested $tier)"; fi; log invalid opus claude-opus-5-5 "$1" "$SESSION" "$account" "$INTOK" "$OUTOK" "$COST" "" "$why" ""; fi; }
 finish() { local file=$gate-$key.json; mv -f "$out" "$EVID/$file"
   log ok "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "${9}" "${10}" "$file"
   printf '%s %s route=%s verdict=%s file=%s\n' "$gate" "$key" "$1" "${9}" "$file"
@@ -153,6 +156,6 @@ if [ "$KIND" = limit ]; then cswap switch --strategy next-available --json >/dev
   account=$(acct "$(cswap status --json 2>/dev/null || true)"); attempt "$effort"
   if [ "$KIND" = invalid ]; then attempt "$effort"; fi
 elif [ "$KIND" = invalid ]; then attempt "$effort"; fi
-case $KIND in limit) reason="usage limit after account switch" ;; invalid) reason="opus run invalid after retry" ;; esac
+case $KIND in limit) reason="usage limit after account switch" ;; invalid) reason="opus run invalid after retry"; if [ "$TIERBAD" = 1 ]; then reason="plan tier mismatch after retry"; fi ;; esac
 if [ "$KIND" = ok ]; then finish opus claude-opus-5-5 "$effort" "$SESSION" "$account" "$INTOK" "$OUTOK" "$COST" "$VERDICT" ""; fi
 log blocked opus claude-opus-5-5 "$effort" "" "$account" 0 0 0 "" "$reason" ""; exit 3

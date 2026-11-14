@@ -12,7 +12,7 @@ Rotation runs inside `gate.sh`, exactly as follows:
 - An invalid run is retried once, then logs `blocked` with `opus run invalid after retry`.
 - Without `cswap`, the account is logged as `signed-in` and a usage limit still gets one rerun.
 
-**Pass conditions.** `plan` uses `plan-schema.json`; the rest use `review-schema.json`. An Opus run counts only if it exited 0, `is_error` is false, `structured_output` is present and `modelUsage` names `claude-opus-5-5`.
+**Pass conditions.** `plan` uses `plan-schema.json`; the rest use `review-schema.json`. An Opus run counts only if it exited 0, `is_error` is false, `structured_output` is present and `modelUsage` names `claude-opus-5-5`. For `plan`, `gate.sh` tells the plan author the requested tier, and the run also needs its returned `tier` to equal it; a lower or higher one is invalid, retried once, then logged `blocked` with `plan tier mismatch after retry`.
 
 ## Step 6 implementer runs: no sandbox (Rahi 2026-11-14)
 
