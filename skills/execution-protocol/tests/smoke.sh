@@ -120,7 +120,7 @@ chk "lane ceiling and source-repo rule" bash -c "grep -qF 'at most 6 concurrent 
 # --- gate: happy path (medium review) ---
 reset; claude_out review "$H" pass; new_ev g1; pkt review "$H"; gaterun "$E" review medium
 chk "happy exit+file" bash -c "[ $GRC = 0 ] && test -s '$E/review-$H.json'"
-chk "opus argv" bash -c "grep -q -- '--model claude-opus-5-5' '$T/calls.log' && grep -q -- '--effort medium' '$T/calls.log' && grep -q -- '--strict-mcp-config' '$T/calls.log' && grep -q 'WebFetch,WebSearch' '$T/calls.log' && grep -q -- '--json-schema' '$T/calls.log'"
+chk "opus argv" bash -c "grep -q -- '--model claude-opus-5-5' '$T/calls.log' && grep -q -- '--effort medium' '$T/calls.log' && grep -q -- '--strict-mcp-config' '$T/calls.log' && grep -q 'WebFetch,WebSearch' '$T/calls.log' && grep -q -- '--json-schema' '$T/calls.log' && ! grep -q 'Requested tier:' '$T/calls.log'"
 chk "log ok+account+sha" bash -c "grep -q '\"status\": \"ok\"' '$E/gates.log' && grep -q '\"account\": \"2\"' '$E/gates.log' && grep -q '\"session_id\": \"sess-1\"' '$E/gates.log' && grep -q '\"cost_usd\": 0.05' '$E/gates.log' && grep -q '\"file_sha256\": \"[0-9a-f]' '$E/gates.log'"
 chk "no email leak" bash -c "! grep -rq leak@example.com '$E'"
 # --- gate: high + --trigger effort ---
@@ -341,12 +341,12 @@ chk "premerge: denied epoch fails EPOCHS" bash -c "[ $PRC = 1 ] && grep -q 'epoc
 hfb() { new_ev hf; printf 'diff\n' > "$T/hf.diff"; PK=$(shasum -a 256 "$T/hf.diff" | awk '{print $1}'); printf 'Tier: high\n' > "$E/PLAN.md"; printf 'Tier: high\n' > "$E/tier-recheck-$PK.md"; printf '{"gate":"plan","tier":"high"}' > "$E/plan-$PK.json"; logline "$E" plan "$PK" high opus "plan-$PK.json"
   for g in review security; do printf 'Gate: %s\nkey: %s\n' "$g" "$PK" > "$E/packet-$g.md"; cat "$T/hf.diff" >> "$E/packet-$g.md"; gatefile "$E" "$g" "$PK"; logline "$E" "$g" "$PK" high fallback "$g-$PK.json"; done; }
 reset; new_ev t1; printf 'facts\n' > "$E/facts.md"; K=$(shasum -a 256 "$E/facts.md" | awk '{print $1}'); { printf 'Gate: plan\n'; cat "$E/facts.md"; } > "$E/packet-plan.md"; claude_out plan "$K" pass; gaterun "$E" plan medium
-chk "T1 plan medium effort high" bash -c "[ $GRC = 0 ] && grep -q -- '--effort high' '$T/calls.log' && tail -1 '$E/gates.log' | grep -q '\"effort\": \"high\"'"
+chk "T1 plan medium effort high" bash -c "[ $GRC = 0 ] && grep -q -- '--effort high' '$T/calls.log' && grep -q 'Requested tier: medium' '$T/calls.log' && tail -1 '$E/gates.log' | grep -q '\"effort\": \"high\"'"
 gaterun "$E" plan medium --trigger; chk "T1 plan --trigger accepted+high" bash -c "[ $GRC = 0 ] && tail -1 '$E/gates.log' | grep -q '\"effort\": \"high\"'"
 reset; new_ev t1b; printf 'facts\n' > "$E/facts.md"; K=$(shasum -a 256 "$E/facts.md" | awk '{print $1}'); { printf 'Gate: plan\n'; cat "$E/facts.md"; } > "$E/packet-plan.md"; claude_out plan "$K" pass low; gaterun "$E" plan low
 chk "plan low exit0, effort high, tier low" bash -c "[ $GRC = 0 ] && grep -q -- '--effort high' '$T/calls.log' && tail -1 '$E/gates.log' | grep -q '\"tier\": \"low\"'"
 for pair in 'high medium' 'low high'; do req=${pair% *}; ret=${pair#* }; reset; new_ev "tier-$req-$ret"; printf 'facts\n' > "$E/facts.md"; K=$(shasum -a 256 "$E/facts.md" | awk '{print $1}'); { printf 'Gate: plan\n'; cat "$E/facts.md"; } > "$E/packet-plan.md"; claude_out plan "$K" pass "$ret"; gaterun "$E" plan "$req"
-  chk "plan tier $ret for $req invalid" bash -c "[ $GRC = 3 ] && [ \$(grep -c '^claude ' '$T/calls.log') = 2 ] && [ \$(grep -c '\"status\": \"invalid\"' '$E/gates.log') = 2 ] && tail -1 '$E/gates.log' | grep -q 'opus run invalid after retry' && ! ls '$E'/plan-*.json 2>/dev/null"; done
+  chk "plan tier $ret for $req invalid" bash -c "[ $GRC = 3 ] && [ \$(grep -c '^claude ' '$T/calls.log') = 2 ] && [ \$(grep -c '\"status\": \"invalid\".*plan tier mismatch' '$E/gates.log') = 2 ] && tail -1 '$E/gates.log' | grep -q 'plan tier mismatch after retry' && ! ls '$E'/plan-*.json 2>/dev/null"; done
 : > "$T/calls.log"; gaterun "$E" epoch low; chk "epoch low exit2 no model" bash -c "[ $GRC = 2 ] && [ \$(grep -cE '^(claude|opencode) ' '$T/calls.log') = 0 ]"
 reset; hfb; pmrun "$E" "$R" --diff "$T/hf.diff"
 chk "T2 High fallback-only provisional fail" bash -c "[ $PRC = 1 ] && grep -q 'provisional fallback pass; needs Opus on this head' '$T/pm.out' && [ \$(grep -c '^gh ' '$T/calls.log') = 0 ]"
