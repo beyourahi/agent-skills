@@ -13,7 +13,7 @@ workflow repository, not a supported product.
 | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`consolidate`](skills/consolidate/)                         | Gets every unfinished branch, worktree, clone, stash and PR into `main`, verifies the result, then removes the rest once you approve.                                                                |
 | [`dependency-upgrade`](skills/dependency-upgrade/)           | Upgrades a repository's dependencies end to end in an isolated worktree: research, plan, migrate, test, review, verify, deliver.                                                                     |
-| [`execution-protocol`](skills/execution-protocol/)           | Applies an always-on protocol to every development task: strict two-model routing (DeepSeek conducts and implements, Opus 5.5 authors every Medium and High plan and reviews via `claude -p`), lanes in fresh OpenCode sessions, gates through `scripts/gate.sh` and merges through `scripts/premerge-and-merge.sh`, bound to the head SHA. |
+| [`execution-protocol`](skills/execution-protocol/)           | Applies an always-on protocol to every development task: Opus 5.5 conducts in Claude Code and plans/gates through `scripts/gate.sh`; DeepSeek V4.1 Flash High implements through `scripts/implement.sh` (Sonnet 5.5 High only as its fallback); merges go through `scripts/premerge-and-merge.sh`. |
 | [`frontend-ui-ux-overhaul`](skills/frontend-ui-ux-overhaul/) | Audits and implements repository-wide frontend, responsive, accessibility, motion and design-system improvements.                                                                                    |
 | [`sync-agent-instructions`](skills/sync-agent-instructions/) | Rewrites a repository's `AGENTS.md` from past sessions, git history and the code, keeping `CLAUDE.md` as an `@AGENTS.md` import.                                                                     |
 
@@ -23,8 +23,9 @@ workflow repository, not a supported product.
 skills/
 ├── consolidate/               SKILL.md, routing.json
 ├── dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
-├── execution-protocol/        SKILL.md, opus-gate-brief.md, opencode-gate.json, plan-schema.json, review-schema.json,
-│                              agents/, scripts/ (gate.sh, premerge-and-merge.sh), tests/smoke.sh
+├── execution-protocol/        SKILL.md, reference.md, opus-gate-brief.md, implementer-brief.md, plan-schema.json,
+│                              review-schema.json, agents/, opencode/, scripts/ (gate.sh, implement.sh,
+│                              implement_lib.py, implementer.sb, premerge-and-merge.sh), tests/ (smoke.sh, implement-smoke.sh)
 ├── frontend-ui-ux-overhaul/   SKILL.md, routing.json
 └── sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```
@@ -63,11 +64,11 @@ python3 ~/.agents/skills/dependency-upgrade/admin/depup-admin.py doctor
 ```
 
 Requirements: git and Python 3.9+ (`sync-agent-instructions` needs Python 3 only).
-`execution-protocol` also needs the `opencode` CLI (OpenCode Go, model
-`opencode-go/deepseek-v4.1-flash#high`), the official `claude` CLI and `gh`, both signed in, and
-`python3`. It optionally uses `claude-swap` (`cswap`), if installed, to rotate Opus gates between
-your signed-in Claude accounts when one runs out of quota; without it the gates use the account
-`claude` is signed in with.
+`execution-protocol` also needs the `claude` CLI (signed in), `gh` (signed in), the `opencode` CLI
+(OpenCode Go, model `opencode-go/deepseek-v4.1-flash#high`) and `python3`; on macOS,
+`scripts/implement.sh` adds `sandbox-exec` and `timeout`. It optionally uses `claude-swap`
+(`cswap`), if installed, to rotate Opus gates between your signed-in Claude accounts when one runs
+out of quota; without it the gates use the account `claude` is signed in with.
 
 ## Usage
 

@@ -1,0 +1,214 @@
+{
+ "$schema": "https://opencode.ai/config.json",
+ "model": "opencode-go/deepseek-v4.1-flash#high",
+ "snapshot": false,
+ "agents": {
+  "implementer": {
+   "description": "Execution-protocol implementer: edits and runs commands inside one worktree from an Opus plan. No git mutation, gh, web, subagents, skills or questions.",
+   "mode": "primary",
+   "permissions": [
+    {
+     "action": "*",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "read",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "edit",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "glob",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "grep",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "list",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "todowrite",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "shell",
+     "resource": "*",
+     "effect": "allow"
+    },
+    {
+     "action": "read",
+     "resource": "*.env",
+     "effect": "deny"
+    },
+    {
+     "action": "read",
+     "resource": "*.env.*",
+     "effect": "deny"
+    },
+    {
+     "action": "edit",
+     "resource": "*.env",
+     "effect": "deny"
+    },
+    {
+     "action": "edit",
+     "resource": "*.env.*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git commit*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git push*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git branch*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git checkout*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git switch*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git reset*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git stash*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git rebase*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git merge*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git tag*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git worktree*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git remote*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git config*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git -C*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "git -c*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "gh",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "gh *",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "curl*",
+     "effect": "deny"
+    },
+    {
+     "action": "shell",
+     "resource": "wget*",
+     "effect": "deny"
+    },
+    {
+     "action": "subagent",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "webfetch",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "websearch",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "question",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "skill",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "external_directory",
+     "resource": "*",
+     "effect": "deny"
+    },
+    {
+     "action": "execute",
+     "resource": "*",
+     "effect": "deny"
+    }
+   ]
+  },
+  "implementer-probe": {
+   "description": "Execution-protocol model probe: no tools.",
+   "mode": "primary",
+   "permissions": [
+    {
+     "action": "*",
+     "resource": "*",
+     "effect": "deny"
+    }
+   ]
+  }
+ }
+}
