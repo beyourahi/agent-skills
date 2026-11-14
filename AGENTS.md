@@ -8,16 +8,22 @@ Skill; this repository is the source of truth, and `~/.agents/skills/<name>` is 
 ```sh
 python3 -m unittest discover -s skills/dependency-upgrade/tests -t skills/dependency-upgrade  # dependency-upgrade tests
 bash skills/execution-protocol/tests/smoke.sh  # execution-protocol smoke tests (fake CLIs)
+diff -rq -x __pycache__ -x graft skills/<name> ~/.agents/skills/<name>  # drift check: must print nothing
 rsync -a --exclude '__pycache__/' --exclude 'graft/.cache/' skills/<name>/ ~/.agents/skills/<name>/  # sync one skill
 ```
+
+Run the drift check from a checkout of the merged `main` before syncing: any difference is drift and
+goes into the repo first. Run it again after the rsync; it must print nothing. A file deleted in the
+repo is removed from the installed copy by hand, then the drift check is rerun.
 
 ## Layout
 
 ```text
 skills/consolidate/               SKILL.md, routing.json (plan/review prompt profiles)
 skills/dependency-upgrade/        SKILL.md, README.md, scripts/, references/, tests/, admin/, agents/
-skills/execution-protocol/        SKILL.md, opus-gate-brief.md, opencode-gate.json, plan-schema.json, review-schema.json,
-                                  agents/, scripts/ (gate.sh, premerge-and-merge.sh), tests/smoke.sh
+skills/execution-protocol/        SKILL.md, reference.md, opus-gate-brief.md, implementer-brief.md, plan-schema.json,
+                                  review-schema.json, agents/, opencode/, scripts/ (gate.sh, implement.sh,
+                                  implement_lib.py, implementer.sb, premerge-and-merge.sh), tests/ (smoke.sh, implement-smoke.sh)
 skills/frontend-ui-ux-overhaul/   SKILL.md, routing.json
 skills/sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
 ```
@@ -32,7 +38,8 @@ skills/sync-agent-instructions/   SKILL.md, scripts/collect_sessions.py
   `allowed-tools`, `license` and `disable-model-invocation`.
 - Python helpers are stdlib-only and must run on 3.9+.
 - Scripts keep their executable bit (`scripts/depup.py`, `scripts/collect_sessions.py`,
-  execution-protocol `scripts/gate.sh`, `scripts/premerge-and-merge.sh` and `tests/smoke.sh`).
+  execution-protocol `scripts/gate.sh`, `scripts/premerge-and-merge.sh`, `scripts/implement.sh`,
+  `tests/smoke.sh` and `tests/implement-smoke.sh`).
 
 ## Always
 

@@ -34,8 +34,15 @@ Also re-read the file you edited: commands, paths and script names must match th
 ## Installing a change locally
 
 ```sh
+diff -rq -x __pycache__ -x graft skills/<name> ~/.agents/skills/<name>
 rsync -a --exclude '__pycache__/' --exclude 'graft/.cache/' skills/<name>/ ~/.agents/skills/<name>/
+diff -rq -x __pycache__ -x graft skills/<name> ~/.agents/skills/<name>
 ```
+
+Run this from a checkout of the merged `main`. The first drift check must print nothing: any
+difference is drift and goes into the repo first. After the rsync, the second drift check must print
+nothing as well. A file deleted in the repo is removed from the installed copy by hand, then the
+drift check is rerun.
 
 Edit here first, then sync; do not edit only the installed copy.
 

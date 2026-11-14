@@ -72,10 +72,11 @@ Check the latest official docs for every command, config, API and version; don't
 
 Never commit to main. One branch and worktree per workstream, cut from the latest default branch; one owner per file set. Run independent work in parallel, scaled to quota and machine; dependent work in order. Read-only research needs no worktree.
 
-**Lanes.** An independent workstream with a disjoint file set gets its own worktree and EVID (`<task>-<lane>`); its steps run through `implement.sh` in that worktree, conducted by the conductor. In-session subagents only for bounded read-only lookups; never two sessions on one file set.
+**Lanes.** Run at most 6 concurrent lanes. An independent workstream with a disjoint file set gets its own worktree and EVID (`<task>-<lane>`); its steps run through `implement.sh` in that worktree, conducted by the conductor. In-session subagents only for bounded read-only lookups; never two sessions on one file set.
 
 **Changes outside a repository, and work with no code diff** (global or user settings, permissions and allow-rules, hooks, policy and instruction files, skills, MCP or harness config, shell profiles, credential config; and no-code tasks such as Lighthouse/PSI runs, production checks, evals, canaries, tool upgrades): the same tiers and gates apply, no PR.
 - Tier them by the step 2 rules. Permissions, allow-rules, hooks, routing/policy, secrets and credential config are always **High**.
+- A skill installed from a source repository (agent-skills: `~/.agents/skills/<name>` is a copy of its `skills/<name>/`) is changed in that repository through the normal PR flow; installing the merged version is the outside change, and the installed copy is never edited first.
 - Never edit the live file first. Back it up to `EVID/backup/`, write the change to a copy, save `EVID/outside-<name>.diff` (backup → copy), and gate it as step 7 says (the usual packet, keyed by the diff's sha256 in place of base/head SHA).
 - No-diff work is specified before it runs: `EVID/op-<name>.md` holds the exact commands, targets and pass criteria; gate it with `scripts/gate.sh <gate> <tier> --diff EVID/op-<name>.md`, check it with `scripts/premerge-and-merge.sh --diff EVID/op-<name>.md`, and run the work only after that script exits 0. Results go to `PROGRESS.md` and the report, never in that file: editing it changes its sha and needs a new gate. Tiers and Medium/High plans apply unchanged.
 - Apply the copy only after the gate passes, then verify the tool still loads (its doctor/validate command); on a failed gate or broken load, restore the backup.
@@ -153,4 +154,4 @@ Remove only branches, worktrees and processes you created and verified as merged
 
 ## 10. Report in a few lines
 
-What's done, tier and triggers, evidence (commands and results, PR and CI links), each gate's verdict, Opus session id and usage, any blocked gate or epoch decision, blockers. Confirm nothing in scope is left undone; never call unverified work done. Write it only at a valid stop.
+What's done, tier and triggers, evidence (commands and results, PR and CI links), each gate's verdict, the implementer route for each step (DeepSeek, Sonnet fallback or conductor), Opus session id and usage, any blocked gate or epoch decision, blockers. Confirm nothing in scope is left undone; never call unverified work done. Write it only at a valid stop.
