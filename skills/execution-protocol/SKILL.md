@@ -1,180 +1,137 @@
 ---
 name: execution-protocol
-description: 'Execution protocol to apply to the task it is attached to - 100% end-to-end completion, strict two-model routing (DeepSeek V4.1 Flash High conducts and implements in OpenCode; Opus 5.5 only at hard gates via claude -p; if Opus is unavailable, DeepSeek V4.1 Flash Max runs the gate in a fresh session), completion over presentation (never stop while executable work remains), risk tiers, Opus-owned plans for every Medium and High task, test-first, local checks, mandatory review gates bound to the head SHA, PR + CI delivery, cleanup, brief report. Always on (Rahi 2026-11-09): apply it to every development task in every session, whether or not the user invokes it.'
+description: 'Execution protocol: 100% end-to-end completion, completion over presentation, Opus 5.5 conducts, plans and gates (`scripts/gate.sh`); DeepSeek V4.1 Flash High implements through `scripts/implement.sh`, Sonnet 5.5 only as its fallback; risk tiers, Opus-owned plans, head-SHA review gates, PR + CI delivery, cleanup. Always on (Rahi 2026-11-09): apply it to every development task in every session, whether or not the user invokes it.'
 ---
 
 ## Execution protocol (applies to the task it accompanies, before or after it)
 
-**Precedence:** safety/system rules > repo AGENTS.md/CLAUDE.md, branch protection and CI > this protocol. If a step is impossible in this harness, say so and use the closest safe alternative. Never fake execution or results.
+**Precedence:** safety/system rules > repo AGENTS.md/CLAUDE.md, branch protection and CI > this protocol. If a step is impossible in this harness, say so and use the closest safe alternative; never fake execution or results.
 
-**Goal: 100% end-to-end completion.** Finish the whole original task, prompt or plan: implementation, fixes, tests, verification and finalization. Keep its full scope and intent; never shrink, defer or leave parts pending for the user. Investigate and resolve blockers and follow-up work yourself, without waiting to be asked again. Report a blocker only when it is a kind listed under "Valid reasons to end a turn" (genuinely external, physically impossible, or a gate blocked as step 1 or step 7 defines) and every reasonable route is exhausted, then finish everything it doesn't block.
+**Goal: 100% end-to-end completion.** Finish the whole task: implementation, fixes, tests, verification, finalization. Keep its full scope and intent; never shrink, defer or leave parts pending. Resolve blockers and follow-up work yourself. Report a blocker only for a kind listed under "Valid reasons to end a turn" once every route is exhausted, then finish the rest.
 
 **Completion over presentation (Rahi 2026-11-11, strict, MUST).** The user must never have to type "continue". Never stop to present progress while executable work remains.
-- **Valid reasons to end a turn, only these:** every item in scope is done and verified; every remaining item is blocked by a genuinely external or physically impossible step (e.g. a passkey touch, a credential no agent can reach) or by a gate blocked as step 1 or step 7 defines, recorded with its reason; or the user told you to stop.
+- **Valid reasons to end a turn, only these:** every item in scope is done and verified; every remaining item is blocked by a genuinely external or physically impossible step (e.g. a passkey touch, a credential no agent can reach) or by a gate blocked as step 1 or 7 defines, recorded with its reason; or the user said stop.
 - **Never a reason to stop:** a finished lane, PR or wave; a long turn or long context (checkpoint to `PROGRESS.md` and keep going; context compaction handles length); gate cost or time; "a good checkpoint"; wanting to report, summarize or confirm direction; uncertainty you can resolve yourself.
-- **No interim reports.** A status update that ends with "Next action: X" (or "▶ next") while X is executable is a violation. Do X instead. A "next" line belongs only in the final report at a valid stop.
-- **Throughput:** run independent lanes in parallel up to the allowed concurrency instead of one at a time; don't spend capacity on extra review rounds or evidence beyond what the gates require.
-- **Before ending any turn (MUST):** list every item of the original task against its status. If any item is executable now, do not end the turn; continue with it. The final report may say "Incomplete" only when every open item has a recorded blocker of a kind listed under "Valid reasons to end a turn" (external, physically impossible, or a gate blocked as step 1 or step 7 defines). If the user told you to stop, say so instead and list each open item as not done.
+- **No interim reports.** A status update ending with "Next action: X" (or "▶ next") while X is executable is a violation: do X. "Next" belongs only in the final report at a valid stop.
+- **Throughput:** run independent lanes in parallel up to the allowed concurrency; no extra rounds or evidence beyond the gates.
+- **Before ending any turn (MUST):** list every task item with its status; if any is executable now, continue. The report may say "Incomplete" only when every open item has a recorded blocker of a kind listed above. If the user said stop, say so and mark each open item not done.
+
+**Pre-authorized (Rahi 2026-11-13, MUST).** Rahi grants every approval, permission and choice this protocol would otherwise ask him for, in advance and for every task: never ask, never wait. A decision that would go to him goes to Opus 5.5 through `gate.sh` at the task's tier: as an open question in `facts.md` (`plan` gate; a Low task with one is planned as Medium), or through the `epoch` gate (step 7). Opus decides with its best judgment on Rahi's behalf, and its logged decision is the authorization.
+- **Never approvable, by any agent or gate:** new spend, purchases, subscriptions, Extra Usage or plan upgrades; sending email or outbound messages under Rahi's identity; exposing secrets or credentials; disabling security, or bypassing or weakening a failed gate; destructive production-data operations without verified recovery; deleting or rewriting legal agreements or acceptance records; changing the model routing or the conductor's own model (only Rahi's own explicit instruction changes routing, as on 2026-11-14); a physically impossible step (passkey touch).
+- A step that needs one is skipped, not asked about: record `blocked external` (or `blocked impossible`), name the boundary on `Routes tried:`, and finish all other work. "The user said stop" still ends work.
 
 **MUST / NEVER below are hard gates.** A gate that did not pass is a stop for that step, never a judgment call. No agent may skip, reorder, weaken or self-approve a gate, and none may change its own model.
 
-**Progress status (MUST).** The last line of `PROGRESS.md` is always `STATUS: in-progress | done | blocked <external|impossible|gate|user-stop> — <reason>`. A `blocked external` or `blocked impossible` line also needs a `Routes tried:` line listing every route actually attempted.
+**Progress status (MUST).** The last line of `PROGRESS.md` is `STATUS: in-progress | done | blocked <external|impossible|gate|user-stop> — <reason>`; `blocked external` or `blocked impossible` also needs a `Routes tried:` line listing every route attempted.
 
-### Outer loop
-
-The user or a parent agent — never the conductor for its own session — can restart the conductor until it reports a valid stop. Save the snippet to a file and run it with `bash`; its `exit` lines would close an interactive shell:
-
-```bash
-SID=${SID:?set SID to the conductor session id}; EVID=${EVID:?set EVID}
-last=$(shasum "$EVID/PROGRESS.md" 2>/dev/null | awk '{print $1}'); last=${last:-none}; same=0
-for i in $(seq 1 30); do
-  opencode run -s "$SID" --model 'opencode-go/deepseek-v4.1-flash#high' --format json \
-    "Continue this task under execution-protocol; read $EVID/PROGRESS.md and keep going." >/dev/null
-  st=$(grep -E '^STATUS:' "$EVID/PROGRESS.md" | tail -1)
-  case "$st" in *"STATUS: done"*) echo "stop: done"; exit 0;; esac
-  case "$st" in *"STATUS: blocked gate"*|*"STATUS: blocked user-stop"*) echo "stop: $st"; exit 0;; esac
-  case "$st" in *"STATUS: blocked external"*|*"STATUS: blocked impossible"*)
-    grep -qE '^Routes tried: *[^ ]' "$EVID/PROGRESS.md" && { echo "stop: $st"; exit 0; };; esac
-  h=$(shasum "$EVID/PROGRESS.md" | awk '{print $1}')
-  if [ "$h" = "$last" ]; then same=$((same + 1)); else same=0; last=$h; fi
-  if [ "$same" -ge 3 ]; then echo "stop: PROGRESS.md unchanged for 3 runs"; exit 0; fi
-done
-echo "stop: 30 runs"; exit 0
-```
-
-## 1. Model routing (Rahi 2026-11-10, strict: exactly two models)
-
-**Harness-agnostic.** This skill works the same in any harness or agent that can run shell commands (OpenCode, Claude Code, Pi or anything else). Routing binds models to roles, not to the harness that loaded the skill. Each model is reached through its own official CLI, so the calling harness never matters.
+## 1. Model routing (Rahi 2026-11-14, strict)
 
 | Role | Model | Reached via |
 |---|---|---|
-| Conductor + implementer | DeepSeek V4.1 Flash 1017 High: `opencode-go/deepseek-v4.1-flash#high` | `opencode` (OpenCode Go) |
-| Gate reviewer + risky-plan author | Claude Opus 5.5: `claude-opus-5-5` (Medium; High for High tier) | `claude -p` (official binary only) |
-| Opus fallback (gates only) | DeepSeek V4.1 Flash 1017 Max: `opencode-go/deepseek-v4.1-flash#max` | `opencode` (OpenCode Go), fresh session |
+| Conductor | Claude Opus 5.5: `claude-opus-5-5`, High | this Claude Code session |
+| Plan author (every tier, Low included) | Opus 5.5, effort high | `scripts/gate.sh plan` |
+| Gate reviewer | Opus 5.5: review medium (high for a High tier or trigger), security high, epoch medium (high for High) | `scripts/gate.sh` (fresh read-only session) |
+| Implementer | DeepSeek V4.1 Flash 1017: `opencode-go/deepseek-v4.1-flash#high`, High only | `scripts/implement.sh` (OpenCode Go inside `scripts/implementer.sb`) |
+| Implementer fallback | Sonnet 5.5: `claude-sonnet-5-5`, High only | only inside `scripts/implement.sh`, after DeepSeek was logged `unavailable` for that step and round |
 
-- **No other model, ever:** no Sonnet, Haiku, Codex/GPT, `deepseek-v4-pro`, `-free` variants, `opencode/` (Zen) routes or Claude-native helper agents. No fallback to any of them. The Opus fallback below is the only fallback.
-- **DeepSeek** does everything except the Opus gates: investigation, Low/Medium plans, all code, tests, debugging, fixes, conflict resolution, git, PR, CI, merge, cleanup.
-- **Opus** never writes or edits code, tests or fixes, never runs git mutations, never merges. It returns a plan or findings only.
-- **Start check (MUST):** identify your own model. If you are DeepSeek V4.1 Flash High, you are the conductor: follow every step yourself. If you are any other model (including Opus) in any harness, you are not the conductor: never write code, tests or fixes yourself; run each implementation step as DeepSeek with `opencode run --model opencode-go/deepseek-v4.1-flash#high --format json` in the task worktree (continue its session with `-s <id>`), and run Opus gates with the step 7 command. If you cannot run either CLI, stop and say so.
-- **Unavailable models:** DeepSeek down or out of quota → the task is blocked; report it (Opus never implements).
-- **Opus fallback (Rahi 2026-11-11, strict, MUST):** when Opus 5.5 (Medium or High) is unavailable for any gate (`plan`, `review` or `security`) after the step 7 rotation and retry, run that same gate on DeepSeek V4.1 Flash Max instead. Never skip or downgrade the gate.
-  1. Always a **new OpenCode session** with fresh context: never `-s`/`--continue`, never the conductor's or implementer's session, never a previous gate's session. It runs with the same isolation as the Opus gate: a private server and the skill's `gate` agent (`opencode-gate.json`: read, grep and glob only; no shell, edits, web, MCP or skills). The prompt goes in as an attached file, so a large diff never hits the argument limit. From the task worktree:
-     ```sh
-     SKILL=~/.agents/skills/execution-protocol
-     { cat "$SKILL/opus-gate-brief.md"; echo; cat "$EVID/packet-<gate>.md"; echo
-       echo 'Return one final JSON object matching this schema:'; cat "$SKILL/<plan|review>-schema.json"
-     } > "$EVID/fallback-prompt-<gate>.md"
-     OPENCODE_CONFIG_CONTENT="$(cat "$SKILL/opencode-gate.json")" \
-       opencode run --standalone --agent gate --model 'opencode-go/deepseek-v4.1-flash#max' --format json \
-       -f "$EVID/fallback-prompt-<gate>.md" "Run the gate in the attached file." > "$EVID/<gate>-<head-sha>.raw.jsonl"
-     ```
-  2. Same packet, same rules, same output: save the final JSON object alone, unedited, to `EVID/<gate>-<head-sha>.json`; keep the `.raw.jsonl` beside it as proof. High still needs `review` and `security` as two separate fresh sessions. Verdict rules, rounds and the merge check are unchanged; a delta re-review after a fix is another fresh session with the full packet plus the new diff. `gate.sh` in step 7 runs this fallback automatically when Opus is unavailable; the commands here are its reference.
-  3. **Return to the original session.** The fallback session only returns the plan or findings; the conductor then continues the task in its own original session (DeepSeek conductor: `-s <original session id>`), saving the result as step 3 or step 7 says. No work continues in the fallback session.
-  4. Log `fallback: deepseek-v4.1-flash#max`, the reason Opus was unavailable, and the session id in `EVID/gates.log`, and name it in the report. Retry Opus first on each new gate; use the fallback again only if Opus is still unavailable.
-  5. If the fallback also fails (error, no valid JSON after one retry), the gate is blocked: record it in `PROGRESS.md`, finish all other work and never merge past it. A gate blocked here, or after the re-planned approach in step 7, counts as a recorded blocker for ending the turn.
-- **Claude accounts (Rahi 2026-11-10):** Opus gates may rotate between Rahi's Claude Pro accounts with the installed claude-swap (`cswap`), only as step 7 says; it uses Rahi's own `cswap` settings (thresholds, priorities, disabled accounts). Never add, remove or edit accounts or `cswap` settings, never use API-key accounts (`--include-api-key-accounts`), extra usage or new spend, and never configure OpenCode's Anthropic provider with subscription OAuth. If `cswap` is missing, skip rotation and use the signed-in account.
-- **Opus out of quota** means every account is exhausted (`cswap` exit 3, or the retry below also hits a limit). **Opus unavailable** means out of quota, down, or a run that still fails the step 7 pass conditions after one retry.
-- Report every model used, per gate, with session id and usage.
+- **No other model or route:** Sonnet 5.5 is never used for any other role or scenario (conductor, planner, gate, helper agent, lookup). No Haiku, Codex/GPT, Kimi, `opencode/` (Zen) routes, OpenCode Go free models, other DeepSeek variants, or the Sonnet helper agents in `~/.claude/agents`. No gate fallback.
+- **Effort:** Opus only medium or high: gates per `gate.sh`; the conductor high, set by `modelSettings` `claude-opus-5-5` `effortLevel` in `~/.claude/settings.json`, changed only on Rahi's instruction. DeepSeek high only. Sonnet high only, never medium (Rahi 2026-11-14).
+- **The conductor** does everything except plans, gates and implementation rounds: investigation, tier, `facts.md`, the bootstrap command, dispatching each step through `implement.sh` (in the background), reading each round's full diff before running anything from it, re-running lint, types, tests and build itself before any gate, every commit, conflict resolution, git, PR, CI, merge, cleanup, and escalation answers (`--notes` within the plan, or a re-plan through the plan gate). It writes code only after `implement.sh` exits 3, 4 or 6 (it implements the step itself or re-plans) and for outside-repo changes. Self-review is not a gate, so gates stay independent.
+- **A gate session** never writes code, tests or fixes, runs no git mutations, never merges; it returns a plan, a decision or findings only.
+- **Start check (MUST):** Opus 5.5 in Claude Code is the conductor: follow every step. A DeepSeek or Sonnet session is never the conductor: it implements only its brief and runs no gate.sh, premerge, git mutation or PR. Any other model stops and says so. Every gate goes through `scripts/gate.sh` (step 7).
+- **Opus unavailable for a gate:** `gate.sh` logs `blocked` and exits 3. Record it in `PROGRESS.md`, finish all other work, never merge past it, and retry Opus at the next gate.
+- **Claude accounts (Rahi 2026-11-10):** Opus gates may rotate between Rahi's Claude Pro accounts only through `gate.sh` (`cswap` mechanics: `reference.md`); the Sonnet fallback never rotates. Never add, remove or edit accounts or settings, never use API-key accounts, extra usage or new spend, never configure OpenCode's Anthropic provider with subscription OAuth; without `cswap`, skip rotation.
+- **Opus unavailable** means every account out of quota (`cswap` exit 3), down, or a step 7 run still failing after one retry.
 
 ## 2. Risk tier (MUST, before planning; rules decide, not judgment)
 
-DeepSeek sets the tier from the request and the code it will touch, and writes the tier and every matched trigger to `PLAN.md` in the evidence folder (step 3). When in doubt, pick the higher tier.
+The conductor sets the tier from the request and the code it will touch, writing the tier and every matched trigger to `PLAN.md` (step 3). When in doubt, pick the higher tier.
 
-**Tier re-check (MUST, before any review gate and again before merge):** re-apply the same rules to the actual diff (`git diff --stat` plus the changed paths and content), not to the request. If the diff touches any High area, changes behavior in a task marked Low, or matches a trigger not in `PLAN.md`, raise the tier, record why in `PLAN.md`, and run every gate the new tier requires (an Opus plan for Medium/High included, written from a fresh `facts.md`, and code realigned to it) before merging. A tier never goes down after planning. Write each re-check to `EVID/tier-recheck-<head-sha>.md` (full 40-character SHA): the `git diff --stat`, every changed path, each tier rule checked with its result, and the resulting tier. The file ends with a line `Tier: <low|medium|high>`.
+**Tier re-check (MUST, before any review gate and again before merge):** re-apply the same rules to the actual diff (`git diff --stat` plus changed paths and content), not the request. If the diff touches a High area, changes behavior in a task marked Low, or matches a trigger not in `PLAN.md`, raise the tier, record why in `PLAN.md`, and run every gate the new tier requires (a fresh `facts.md` Opus plan included, code realigned) before merging. A tier never goes down after planning. Write each re-check to `EVID/tier-recheck-<head-sha>.md` (full 40-character SHA): the `git diff --stat`, every changed path, each tier rule with its result, and the resulting tier; it ends `Tier: <low|medium|high>`.
 
 - **High:** touches auth, sessions, permissions, tenancy, payments, billing, webhooks, money, inventory, migrations, stored data, secrets, CI/CD, deploy, infrastructure or legal text.
 - **Medium:** ordinary product code that is not High.
 - **Low:** docs, comments, copy, config typos, or a small isolated change with no behavior change.
-- **Opus triggers** (raise a Medium task's Opus plan and review effort to `high`): a new dependency; a public API, schema or contract change; a plan touching more than ~8 files or more than one package; review round 2 still disputed.
+- **Opus triggers** (raise a Medium task's Opus review effort to `high`): a new dependency; a public API, schema or contract change; a plan touching more than ~8 files or more than one package; review round 2 still disputed.
 
-## 3. Plan (who writes it depends on tier)
+## 3. Plan (Opus, every tier)
 
-Evidence folder for every task: `~/.local/state/dev-evidence/<task>/` (`EVID` below). Save `PLAN.md` and `PROGRESS.md` there so work survives interruptions.
+Evidence folder per task: `~/.local/state/dev-evidence/<task>/` (`EVID` below), holding `PLAN.md` and `PROGRESS.md`.
 
-- **Low:** DeepSeek writes the plan: acceptance criteria, files, tests, safeguards.
-- **Medium and High (Rahi 2026-11-10): Opus owns the plan.** Opus is not shown a DeepSeek plan, so it cannot anchor on one.
-  1. DeepSeek writes `EVID/facts.md`: the request verbatim, repo rules that apply, relevant files with `file:line`, current behavior, existing patterns, constraints, open questions. Facts only: no proposed solution, design or preference.
-  2. Opus gate `plan` (step 7 command, packet `EVID/packet-plan.md` = gate name, tier and the full `facts.md`; effort per tier) reads the packet plus the repo and returns the plan: acceptance criteria, design, file list, tests, risks, rollback.
-  3. DeepSeek saves it as `PLAN.md` and follows it exactly; the plan gate runs through `gate.sh`, which writes `EVID/plan-<sha256 of facts.md>.json`. A needed deviation goes back to Opus before any code changes: append the reason and the current `PLAN.md` to `facts.md` and run the `plan` gate again (a new plan restarts the round counts).
-- Acceptance criteria are fixed before code is written. Later changes to them need the same author (DeepSeek for Low, Opus for Medium and High).
+**Opus owns every plan (Rahi 2026-11-14), Low included,** blind to any conductor plan.
+1. The conductor writes `EVID/facts.md`: the request verbatim, repo rules that apply, relevant files with `file:line`, current behavior, existing patterns, constraints, open questions (including any decision the user would otherwise make). Facts only: no proposed solution, design or preference.
+2. Opus gate `plan` via `gate.sh plan <low|medium|high>` reads the packet (`EVID/packet-plan.md`) plus the repo and returns acceptance criteria, design, file list (exact repo-relative paths; a directory ends in '/'), tests, risks, rollback.
+3. The conductor saves it as `PLAN.md` and follows it exactly; `gate.sh` writes `EVID/plan-<sha256 of facts.md>.json`, which `implement.sh` turns into the brief. A needed deviation goes back to Opus before any code: append the reason and the current `PLAN.md` to `facts.md`, rerun the `plan` gate (a new plan restarts the round counts).
+- Acceptance criteria are fixed before code; later changes go through the plan gate. No task code or commit exists before the plan gate passes (premerge checks commit dates for Medium/High).
 
 ## 4. Current docs and tools
 
-Check the latest official docs for every command, config, API and version you rely on; don't trust memory. Discover and use the installed MCP servers, tools and skills that genuinely help, following their documented workflows; skip redundant ones.
+Check the latest official docs for every command, config, API and version; don't trust memory. Use the installed MCP servers, tools and skills that genuinely help, per their docs; skip redundant ones.
 
 ## 5. Isolate
 
-Never commit to main. One branch and worktree per workstream, cut from the latest default branch. One owner per file set. Run independent work in parallel as separate processes, scaled to quota and machine; dependent work in order. Read-only research needs no worktree.
+Never commit to main. One branch and worktree per workstream, cut from the latest default branch; one owner per file set. Run independent work in parallel, scaled to quota and machine; dependent work in order. Read-only research needs no worktree.
 
-**Lanes.** Each independent workstream with a disjoint file set gets its own worktree, its own EVID (`<task>-<lane>`) and its own fresh session, started in that worktree with `opencode run --model 'opencode-go/deepseek-v4.1-flash#high' --format json --title <lane> "<lane prompt>"`; save the first event's `sessionID` in the lane EVID and continue it with `-s`. Lanes prepare only: investigate, `facts.md`, code, tests and local commits. The supervising session runs `gate.sh`, push, PR, `premerge-and-merge.sh`, and all network, production and email work. Start small, max 6 concurrent. A lane whose session grows too long gets a new fresh session told to read its `PROGRESS.md`, `PLAN.md` and git log. In-session subagents only for bounded read-only lookups. Never two sessions on one file set.
+**Lanes.** An independent workstream with a disjoint file set gets its own worktree and EVID (`<task>-<lane>`); its steps run through `implement.sh` in that worktree, conducted by the conductor. In-session subagents only for bounded read-only lookups; never two sessions on one file set.
 
-**Changes outside a repository** (global or user settings, permissions and allow-rules, hooks, policy and instruction files, skills, MCP or harness config, shell profiles, credential config): the same tiers and gates apply; there is just no PR.
+**Changes outside a repository, and work with no code diff** (global or user settings, permissions and allow-rules, hooks, policy and instruction files, skills, MCP or harness config, shell profiles, credential config; and no-code tasks such as Lighthouse/PSI runs, production checks, evals, canaries, tool upgrades): the same tiers and gates apply, no PR.
 - Tier them by the step 2 rules. Permissions, allow-rules, hooks, routing/policy, secrets and credential config are always **High**.
-- Never edit the live file first. Back it up to `EVID/backup/`, write the change to a copy, save `EVID/outside-<name>.diff` (backup → copy), and gate that diff exactly as step 7 says (the usual packet, with the diff's sha256 in place of base/head SHA; the file name uses the diff's `shasum -a 256` in place of a head SHA).
-- Apply the copy only after the gate passes, then verify the tool still loads it (e.g. its own doctor/validate command). On a failed gate or a broken load, restore the backup.
+- Never edit the live file first. Back it up to `EVID/backup/`, write the change to a copy, save `EVID/outside-<name>.diff` (backup → copy), and gate it as step 7 says (the usual packet, keyed by the diff's sha256 in place of base/head SHA).
+- No-diff work is specified before it runs: `EVID/op-<name>.md` holds the exact commands, targets and pass criteria; gate it with `scripts/gate.sh <gate> <tier> --diff EVID/op-<name>.md`, check it with `scripts/premerge-and-merge.sh --diff EVID/op-<name>.md`, and run the work only after that script exits 0. Results go to `PROGRESS.md` and the report, never in that file: editing it changes its sha and needs a new gate. Tiers and Medium/High plans apply unchanged.
+- Apply the copy only after the gate passes, then verify the tool still loads (its doctor/validate command); on a failed gate or broken load, restore the backup.
 - List every outside change, its tier, gate file and verification in the step 10 report.
 
-## 6. Build test-first and verify locally
+## 6. Implement through implement.sh, test-first, and verify locally
 
-RED → GREEN → REFACTOR for behavior changes, plus a regression test for every bug fix. Match repo conventions; no unrelated changes. Then run the repo's own lint, type check, tests and build, plus E2E/UI checks when affected. All MUST pass before any review gate. Never skip hooks, delete tests or loosen gates.
+RED → GREEN → REFACTOR for behavior changes, plus a regression test for every bug fix. Match repo conventions; no unrelated changes. Run the repo's lint, types, tests and build, plus E2E/UI checks when affected; all MUST pass before any review gate. Never skip hooks, delete tests or loosen gates. For a bug-fix step the conductor confirms RED itself: in a scratch detached worktree at the step's base with only the step's test files applied, it runs the regression test and records `RED confirmed: <cmd> -> <failing line>` in `PROGRESS.md`; it must fail on the bug, not on setup, or the round is rejected (`implement.sh --discard`, rerun with `--notes`). The implementer's own RED claim never counts.
+
+**Implementation (MUST).** Each step runs from the root of its clean, linked task worktree:
+
+```sh
+EVID=~/.local/state/dev-evidence/<task> "$SKILL/scripts/implement.sh" <low|medium|high> --bootstrap '<setup cmd>|none' [--step NAME] [--notes FILE] [--trigger]
+```
+
+The brief comes from the last logged plan; attempts log to `EVID/impl.log`. Exit 0 done: read the full diff (`git status`, `git diff HEAD`) before running anything from it, re-run the bootstrap and the repo's checks yourself, and commit each accepted round before the next. 1 failed round (reason in `impl.log`; change saved to `impl-<tag>-<route>-discarded.patch`, tree reset): next round with `--notes`, at most 3 per step and plan. 2 usage or precondition. 3 no implementer available: implement the step yourself and record route `conductor` in `PROGRESS.md`. 4 round cap: re-plan through the plan gate, or implement the step yourself. 5 escalate (`EVID/escalation-<tag>.md`): answer within the plan through `--notes`, or re-plan. **Exit 6** (confined processes survived): read, run, bootstrap or commit nothing from that worktree; from the main checkout run `git worktree remove --force <wt>`, never reuse the path, continue in a fresh worktree from the last accepted commit, and record the PIDs in `PROGRESS.md` and the report. After a killed run, `implement.sh --discard --bootstrap <cmd|none>` resets the worktree. Take the bootstrap from the repo's AGENTS.md/CLAUDE.md/README (or `none`) and record it in `PROGRESS.md`; resets wipe ignored files, so it must recreate them. Run nothing else in the worktree during a run: it tries to stop every process in it or sandboxed to it (exit 6 if one survives).
+
+**Residual risks (accepted; see `reference.md`):** run no command-accepting local service during a round.
 
 ## 7. Review gates (MUST pass before merge)
 
 | Tier | Gate(s) | Reviewer |
 |---|---|---|
-| Low | `review` | Fresh DeepSeek session: `opencode run --agent plan --model opencode-go/deepseek-v4.1-flash#high --format json "$(cat "$EVID/packet-review.md")"` (read-only agent, new session, never the implementer's). The packet ends by asking for one final JSON object matching `review-schema.json`; save that object alone to `EVID/review-<head-sha>.json`. |
+| Low | `review` | Opus, `--effort medium` |
 | Medium | `review` | Opus, `--effort medium` (`high` if a trigger matched) |
 | High | `review` and `security` (separate fresh sessions) | Opus, `--effort high` |
 
-**Run every gate with `scripts/gate.sh`, never by hand.** From the task worktree:
+**Every gate runs through `scripts/gate.sh` (MUST),** including a program-level or multi-task plan (in its own EVID), re-reviews and the `epoch` decision. Never run `claude -p` yourself; a gate run any other way did not happen. From the task worktree:
 
 ```sh
 SKILL=~/.agents/skills/execution-protocol
-EVID=~/.local/state/dev-evidence/<task> "$SKILL/scripts/gate.sh" <plan|review|security> <low|medium|high> [--trigger] [--diff FILE] [--base REF]
+EVID=~/.local/state/dev-evidence/<task> "$SKILL/scripts/gate.sh" <plan|review|security|epoch> <low|medium|high> [--trigger] [--diff FILE] [--base REF]
 ```
 
-It computes the key, refuses a packet that does not contain the key, `Gate: <gate>` and the exact diff (`--diff FILE`, or `git diff` from the merge-base with `--base`, default `origin/HEAD`, to HEAD), enforces the round cap from `gates.log`, serializes Opus calls with the account lock and cswap rotation, retries once on a usage limit or an invalid run, falls back to DeepSeek Max when Opus is unavailable, writes `EVID/<gate>-<key>.json` and appends one JSON line to `EVID/gates.log`. Exit 0: pass, or a valid `plan`. Exit 1: valid run with verdict `fail`. Exit 2: usage or precondition error, no model called. Exit 3: gate blocked (the fallback failed too). Exit 4: round cap reached, re-plan required. Exit 5: the Opus lock wait timed out; rerun. `--base` must be an `origin/<branch>` ref; the log records the merge-base and diff hash, and the merge script accepts a gate only if they match the full PR diff. Rounds: at most 3 per plan and 6 in total per gate, then the gate is blocked. A diff that touches agent config (`opencode.json`, `.opencode/`, `.claude/`, `.agents/`, `AGENTS.md` or `CLAUDE.md`) is never Low, and the DeepSeek fallback refuses it. Refusals after the key is known are logged as `invalid`. A text file that the diff shows only as "Binary files differ" (a `.gitattributes` `-diff` or `binary` entry) is refused (exit 2); drop that attribute first. The command block below is the reference for what the script runs.
+It refuses a packet lacking the key, `Gate: <gate>` or the exact diff (`--diff FILE`, or `git diff` from the merge-base with `--base`, default `origin/HEAD`, to HEAD; a `--base` not of `origin/<branch>`; a text file shown only as "Binary files differ"). Exit 0 pass or a valid `plan`; 1 `fail`; 2 usage or precondition, no model; 3 blocked; 4 round cap, re-plan required; 5 lock timeout, rerun. Rounds: 3 per plan, 6 total per gate per epoch. The log records the merge-base and diff hash; the merge script accepts a gate only if they match the full PR diff. A diff touching agent config (`opencode.json`, `.opencode/`, `.claude/`, `.agents/`, `AGENTS.md`, `CLAUDE.md`) is never Low. Refusals after the key log `invalid`.
 
-**Packet** (`EVID/packet-<gate>.md`): the gate name, the claimed tier and triggers, the original request verbatim, the acceptance criteria from `PLAN.md`, the full 40-character base and head SHA (or the diff's sha256 for an outside-repo change), and the full diff. NEVER include the implementer's summary, rationale or self-assessment, and never secrets or credentials: `gate.sh` needs the exact diff, so a secret in the diff is removed from the branch (and rotated), never redacted in the packet.
+**Packet** (`EVID/packet-<gate>.md`): gate name, claimed tier and triggers, the original request verbatim, the acceptance criteria from `PLAN.md`, for review and security the logged plan's `risks` verbatim under `## Plan risks` (check each in addition to the whole diff), the full 40-character base and head SHA (or the diff's sha256), and the full diff. NEVER include the implementer's summary, rationale or self-assessment (no `impl-*`, `escalation-*` or session exports), and never secrets or credentials: `gate.sh` needs the exact diff, so a secret in it is removed from the branch (and rotated), never redacted.
 
-**Every reviewer, including the Low DeepSeek reviewer, also checks the claimed tier against the diff.** An under-classified tier is an `important` finding: the gate fails, and the work re-enters at the correct tier.
+Every reviewer, Low included, checks the claimed tier against the diff; an under-classified tier is `important` and re-enters at the correct tier.
 
-**Opus command** (run from the task worktree; `<gate>` is `plan`, `review` or `security`; `<effort>`: `medium` for Medium, `high` for High or a matched trigger):
-
-```sh
-SKILL=~/.agents/skills/execution-protocol
-claude -p --model claude-opus-5-5 --effort <effort> \
-  --setting-sources "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
-  --permission-mode dontAsk \
-  --allowedTools "Read,Grep,Glob" \
-  --disallowedTools "Bash,Edit,Write,NotebookEdit,Agent,WebFetch,WebSearch" \
-  --append-system-prompt "$(cat "$SKILL/opus-gate-brief.md")" \
-  --output-format json --json-schema "$(cat "$SKILL/<plan|review>-schema.json")" \
-  < "$EVID/packet-<gate>.md" > "$EVID/<gate>-<head-sha>.json"
-```
-
-**Account rotation (around every Opus call):**
-1. Before the call: `cswap auto --once --model Opus --json` (skip if `cswap` is absent). Exit 0 = switched, 2 = no change: continue. Exit 1 = error: retry once after ~30 s, then continue on the current account. Exit 3 = all accounts exhausted: Opus is unavailable; use the step 1 fallback.
-2. If the call fails on a usage limit (`is_error` true and the result mentions a usage or rate limit): run `cswap switch --strategy next-available --json`, then rerun the same call once. A second limit failure, or no available account, makes Opus unavailable; use the step 1 fallback. Never loop.
-3. Run Opus calls one at a time while rotating, so two gates never switch accounts at once (`gate.sh` holds a machine-wide lock). Every gate run is a fresh session with the full packet; never `--resume`.
-4. Log the account number (never the email) used for each call in `EVID/gates.log`.
-
-`plan` uses `plan-schema.json`; `review` and `security` use `review-schema.json`. A run passes only when the command exits 0, `is_error` is false, `structured_output` is present, and `modelUsage` names `claude-opus-5-5`. Otherwise the gate has not run: retry once, then treat Opus as unavailable and use the step 1 fallback. A fallback run passes only when it ran the exact step 1 command (isolated `gate` agent, `deepseek-v4.1-flash#max`), exits 0 with no `error` event, and returned one valid JSON object matching the schema. Opus is unavailable only for the reasons in step 1: a `fail` verdict is a valid run, never a reason to switch, and a malformed command is fixed and rerun, never counted as unavailability.
+**Rotation and pass conditions** are inside `gate.sh` (see `reference.md`); never resume a gate session. A `fail` verdict is a valid run, never a switch reason; a malformed command is fixed and rerun, never unavailability.
 
 **Verdict rules:**
-- A gate passes only with `verdict: "pass"` and zero `important` findings, bound to the exact head SHA in the file name and in its `head_sha` field (full 40-character commit SHA, every tier, every round; never round-numbered names like `review-r2.json`). Outside-repo gates use the diff's 64-character sha256 instead.
-- `important` findings are fixed by DeepSeek, then re-verified (step 6), then re-reviewed by `gate.sh` in a fresh session (never `--resume`) with the full packet plus a section headed exactly `## Changes since the last round`. It holds: the last reviewed key (one a gate of this task logged `ok`); the diff from that state to now (repo: `git diff --no-color <last reviewed head> H`; outside: `diff -u` of the previous and current diff files, each saved as `EVID/diff-<key>.diff`); and each earlier finding with its fix or written reason. Round 1 is always a full review, and a packet without this section gets one. In later rounds a new `important` finding is allowed only for code in that section, unchanged code whose behavior it alters, a fix that does not resolve its finding, an under-classified tier, or a concrete exploitable security issue anywhere in the diff; other issues in unchanged code are `pre-existing`. A finding is dropped only when the reviewer accepts the written reason.
+- A gate passes only with `verdict: "pass"` and zero `important` findings, bound to the exact head SHA in the file name and `head_sha` field (full 40-character SHA, every tier, every round; never `review-r2.json`-style names); outside-repo gates use the diff's 64-character sha256.
+- `important` findings are fixed through `implement.sh --step fix-<gate>-r<n> --notes <findings>` (exit 3 or 4: by the conductor), re-verified (step 6), then re-reviewed by `gate.sh` in a fresh session with the full packet plus a section headed exactly `## Changes since the last round`: the last reviewed key (one this task's gate logged `ok`), the diff from it to now (repo: `git diff --no-color <last reviewed head> H`; outside: `diff -u` of the previous and current diff files, saved as `EVID/diff-<key>.diff`), and each earlier finding with its fix or written reason. Round 1 is always a full review; a packet without this section gets one. Later rounds allow a new `important` finding only for that section's code, behavior it alters, an unresolved fix, an under-classified tier, or a concrete exploitable security issue anywhere; other unchanged-code issues are `pre-existing`. A finding drops only if the reviewer accepts the reason.
 - Any new commit after a pass invalidates it; re-review the delta for the new head.
-- At most 3 rounds per gate. After round 3, stop that loop and rethink the approach: a new plan from the plan author (step 3), then build and gate it. A Low task that reaches the cap is raised to Medium, so Opus writes the new plan. This is not a reason to end the turn. If the new approach also fails 3 rounds, record that gate as blocked in `PROGRESS.md` and finish all other work.
-- After a gate is blocked at the round cap, only the user can authorize another plan epoch. Record it as the first line of the new EVID's gates.log: `{"gate": "note", "status": "authorized", "reason": "<the user's decision>; parent log <path>"}`. A new EVID for the same task without that line is never allowed.
-- Rounds are counted per gate from EVID/gates.log across all sessions (a fresh conductor, lane or reviewer session never resets them), and a blocker counts only after every route listed by the task or the user has actually been tried and recorded under "Routes tried:" in PROGRESS.md.
-- Log every gate's session id, effort, input/output tokens and `total_cost_usd` to `EVID/gates.log`.
+- At most 3 rounds per gate. After round 3, rethink: a new plan from the plan author (step 3), then build and gate it; a Low task at the cap becomes Medium. Not a reason to end the turn. If that also fails 3 rounds, run the epoch rule below; a fail there records the gate blocked in `PROGRESS.md` and you finish other work.
+- **Epoch rule (Rahi 2026-11-13).** A new plan epoch needs a passing `epoch` gate. After a `review` or `security` gate is blocked at the round cap, write `EVID/epoch.md`, facts only: the request verbatim, the blocked gate and key, its gates.log rows, every round's gate file, and `PLAN.md`; no proposed approach. Write `EVID/packet-epoch.md` (`Gate: epoch`, the tier, the sha256 of `epoch.md`, its full text) and run `gate.sh epoch <medium|high>`; the tier cannot be below the blocked gate's. Pass authorizes one new epoch in this EVID: round totals restart and a new Opus plan (step 3) comes before any review; `fail` is final, recorded as `blocked gate`. At most 2 authorized epochs per EVID, then `gate.sh` logs `blocked` and exits 3. Never open a new EVID to get around a block.
+- **Legacy fallback rows (logged before 2026-11-13).** On High, a route `fallback` pass on `review` or `security` is provisional: it cannot merge until Opus passes that gate on the same key. That Opus run replaces it and is not a round.
+- Rounds are counted per gate from EVID/gates.log across all sessions, and a blocker counts only after every route listed by the task or user has actually been tried and recorded under "Routes tried:" in PROGRESS.md.
 
 ## 8. Deliver through PRs (merge gate, MUST)
 
-Commit, push, and open one PR per workstream; the PR body states the tier, triggers, and links each passing gate file. Merge only when all of these hold:
+Commit, push and open one PR per workstream; the PR body states the tier, triggers and links each passing gate file. Merge only when all hold:
 
-1. The tier re-check (step 2) has run on the final diff, and every gate required by the resulting tier has a passing file named for the current head SHA (`git rev-parse HEAD` equals that SHA), or the merge script carries it from an earlier gated head with the exact same PR diff (never when any run on that diff failed).
+1. The tier re-check (step 2) ran on the final diff, and every gate the resulting tier requires has a passing file named for the current head SHA (`git rev-parse HEAD` equals it), or the merge script carries it from an earlier gated head with the exact same PR diff (never after a failed run on it). On High, a legacy `fallback` pass needs an Opus pass on this head.
 2. CI is green on that same SHA.
 3. Repo rules and branch protection are satisfied.
 4. **`premerge-and-merge.sh` exits 0.** Run it from the task worktree; merging by any other means is NEVER allowed:
@@ -184,16 +141,16 @@ SKILL=~/.agents/skills/execution-protocol
 EVID=~/.local/state/dev-evidence/<task> "$SKILL/scripts/premerge-and-merge.sh" <PR-number> [--no-ci]
 ```
 
-It checks the clean tree, the tier re-check (final tier is the highest `Tier:` line across the re-check and `PLAN.md`, and a lower re-check fails), a logged Opus plan for Medium/High, each required gate file bound to the current head and to a logged ok round with an adequate route and tier, the round counts and blocked entries; then it writes the check output into the PR body and squash-merges with `--match-head-commit`. Outside a repo, `--diff FILE` runs the same checks on the diff's sha256 and calls no `gh`. Both `PLAN.md` and the re-check must carry a `Tier:` line. Add `--no-ci` only for a repo with no CI at all: it passes the CI step only when `gh pr checks` reports no checks, the worktree has no `.github/workflows` and `origin/<base>` has none either; otherwise checks must pass. It is recorded in the PR body. Exit 1 means no merge; never write or rename a gate file by hand.
+It runs the checks listed in `reference.md`. It writes the output into the PR body and squash-merges with `--match-head-commit`; outside a repo, `--diff FILE` runs the same checks on the diff's sha256, no `gh`. Both `PLAN.md` and the re-check need a `Tier:` line. `--no-ci` only for a repo with no CI: it passes only when `gh pr checks` reports no checks and neither the worktree nor `origin/<base>` has `.github/workflows`. Exit 1 means no merge; never write or rename a gate file by hand.
 
-**Update the branch from main before the tier re-check and the final gate.** If main moves after the final gate, the script carries an earlier gate only when the PR diff is byte-identical (`CARRY <gate> <old> -> <new>`, logged); otherwise re-gate the new head.
+**Update from main before the tier re-check and final gate.** If main moves after the final gate, the script carries an earlier gate only when the PR diff is byte-identical (`CARRY <gate> <old> -> <new>`, logged); otherwise re-gate the new head.
 
-Combined work: integrate onto the latest main, retest, and re-gate the combined diff before merging. If the repo auto-deploys, check production health afterwards.
+Combined work: integrate onto the latest main, retest and re-gate the combined diff before merging; if the repo auto-deploys, check production health.
 
 ## 9. Clean up
 
-Remove only branches and worktrees you created and verified as merged, and only processes you started. Never touch unrelated or unmerged work. If lasting lessons came up, run `sync-agent-instructions`. Run `consolidate` only for repo-wide reconciliation of stray work, following its own rules.
+Remove only branches, worktrees and processes you created and verified as merged. Never touch unrelated or unmerged work. If lasting lessons came up, run `sync-agent-instructions`; run `consolidate` only for repo-wide reconciliation of stray work.
 
 ## 10. Report in a few lines
 
-What's done, tier and triggers, evidence (commands and results, PR and CI links), each gate with its verdict, model (Opus or the DeepSeek Max fallback, with the reason), session id and usage, any blocked gate, and blockers. Confirm nothing in scope is left undone. Never call unverified work done. Write this report only when a valid reason to end the turn exists (see "Completion over presentation").
+What's done, tier and triggers, evidence (commands and results, PR and CI links), each gate's verdict, Opus session id and usage, any blocked gate or epoch decision, blockers. Confirm nothing in scope is left undone; never call unverified work done. Write it only at a valid stop.

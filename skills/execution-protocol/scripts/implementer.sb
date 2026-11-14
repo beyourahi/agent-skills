@@ -1,0 +1,45 @@
+(version 1)
+;; implementer.sb: Option B write boundary for scripts/implement.sh (from the verified sbx-canary-1114 profile).
+;; Reads, network and processes stay allowed except the rules below.
+(allow default)
+;; The only writable places: the task worktree minus its .git pointer, OpenCode's database, logs and
+;; tool/shell output, the per-user temp and cache dirs, and /dev. Nothing else in OpenCode's data dir
+;; (snapshot and repo git dirs, bin, mcp-auth.json) nor its cache is writable, so a run cannot plant code or
+;; git config that later unconfined OpenCode sessions execute; state, cache and TMPDIR go to the per-run dir.
+(define (writable)
+  (require-any
+    (require-all (subpath (param "WT"))
+                 (require-not (subpath (string-append (param "WT") "/.git"))))
+    (regex (string-append "^" (regex-quote (param "OCDATA")) "/opencode\\.db(-wal|-shm|-journal)?$"))
+    (subpath (string-append (param "OCDATA") "/log"))
+    (subpath (string-append (param "OCDATA") "/tool-output"))
+    (subpath (string-append (param "OCDATA") "/shell"))
+    (subpath (param "UTMP"))
+    (subpath (param "UCACHE"))
+    (subpath "/dev")))
+(deny file-write* (require-not (writable)))
+(deny file-unlink (require-not (writable)))
+;; A hard link would give an outside file a name inside the worktree; Apple's App Sandbox denies them the same way.
+(deny file-link)
+;; No reads of these credential, evidence and Palace paths (other reads stay allowed).
+(deny file-read*
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (subpath (string-append (param "HOME") "/.config/gh"))
+  (subpath (string-append (param "HOME") "/.claude"))
+  (subpath (string-append (param "HOME") "/Library/Keychains"))
+  (subpath (string-append (param "HOME") "/Desktop/mind-palace"))
+  (subpath (param "EVROOT")))
+;; No Keychain through securityd (the security CLI, go-keyring, Security.framework): Claude and gh tokens live there.
+(deny mach-lookup (global-name "com.apple.SecurityServer") (global-name-prefix "com.apple.security"))
+;; No way to have an unconfined process started (measured in EVID/escape-probe.txt): LaunchServices, AppleEvents,
+;; launchd jobs, and unix sockets of unconfined servers (tmux, agents, IDEs). Sockets inside WT and RUN stay usable.
+(deny lsopen)
+(deny appleevent-send)
+(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") (global-name-prefix "com.apple.coreservices.quarantine"))
+(deny process-exec (literal "/bin/launchctl") (literal "/usr/bin/osascript") (literal "/usr/bin/open"))
+(deny network-outbound
+  (require-all (subpath "/")
+               (require-not (subpath (param "WT")))
+               (require-not (subpath (param "RUN")))
+               (require-not (literal "/private/var/run/syslog"))
+               (require-not (literal "/private/var/run/mDNSResponder"))))
