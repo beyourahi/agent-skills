@@ -14,9 +14,9 @@ Rotation runs inside `gate.sh`, exactly as follows:
 
 **Pass conditions.** `plan` uses `plan-schema.json`; the rest use `review-schema.json`. An Opus run counts only if it exited 0, `is_error` is false, `structured_output` is present and `modelUsage` names `claude-opus-5-5`.
 
-## Step 6 implementer runs: residual risks
+## Step 6 implementer runs: no sandbox (Rahi 2026-11-14)
 
-**Residual risks (accepted):** `sandbox-exec` is deprecated (a failure makes DeepSeek unavailable, never unconfined); reads outside its deny list and HTTPS egress remain, including DeepSeek's own Go credential; OpenCode's database, logs and tool output and the per-user temp and cache dirs stay writable, so a hostile run could alter OpenCode data or forge its own export; the profile blocks LaunchServices, AppleEvents, launchctl and unix sockets outside the worktree and run dir, but localhost TCP and Mach services of running apps stay reachable, so run no command-accepting local service during a round; for the Sonnet route these routes and the reaper's detection are unverified; a confined process that outlives the reaper gives exit 6; implementer code runs unconfined in the conductor's checks, hooks and CI after the conductor has read it.
+**Accepted risks:** the implementer runs as Rahi's user with unrestricted reads (credentials included), writes and network; the permission rules match command prefixes lexically and can be bypassed (for example through `sh -c`); writes to git config or hooks in the common git dir are not detected; a process that leaves the worktree (`setsid` plus `cd` elsewhere) is not reaped; and implementer code runs in the conductor's checks after the conductor reads the diff.
 
 ## Step 8 delivery: premerge checks
 

@@ -97,18 +97,20 @@ if cmd == "snclass":
 if cmd == "row":
     ev = a[1]; logrow(ev, **dict(zip([f for f in FIELDS if f != "files"], a[2:]))); sys.exit()
 if cmd == "sonnetcfg":
-    # Claude Code's own sandbox for the Sonnet route (AC15); Bash is its only tool, so every file access goes through it.
-    wt, gc, home, evroot = a[1:5]; rd = [os.path.join(home, p) for p in (".ssh", ".config/gh", ".claude", "Library/Keychains", "Desktop/mind-palace")] + [evroot]
-    print(json.dumps({"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True,
-        "filesystem": {"denyWrite": [os.path.join(wt, ".git"), gc], "denyRead": rd}, "network": {"allowedDomains": []}}})); sys.exit()
+    # Claude Code permission rules for the Sonnet route (AC15): deny rules beat --allowedTools, and the Bash rules derive from
+    # opencode.json so the two implementer routes cannot drift.
+    o = json.load(open(a[1])); deny = []
+    for p in ((o.get("agents") or {}).get("implementer") or {}).get("permissions") or []:
+        if not isinstance(p, dict) or p.get("action") != "shell" or p.get("effect") != "deny": continue
+        r = str(p.get("resource") or ""); c = r.rstrip("*").strip()
+        deny.append("Bash(%s:*)" % c if r.endswith("*") else "Bash(%s)" % c)
+    deny += ["Read(**/*.env)", "Read(**/*.env.*)", "Edit(**/*.env)", "Edit(**/*.env.*)"]
+    print(json.dumps({"permissions": {"deny": deny}})); sys.exit()
 if cmd in ("pids", "reap"):
-    # pids WT PID: processes of this user whose cwd is in WT, or that may write WT but not WT/.git (confined by implementer.sb or
-    # Claude Code's sandbox to this worktree, even after setsid and a cd elsewhere), minus PID and its ancestors.
-    import ctypes; sc = ctypes.CDLL("/usr/lib/libSystem.dylib").sandbox_check; sc.restype = ctypes.c_int; sc.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    # pids WT PID: this user's processes whose cwd is WT or under it, minus PID and its ancestors.
     # reap WT PID: TERM the targets, wait 3 s, SIGSTOP until no unstopped target is left (a stopped process cannot fork; at most
     # 20 passes), SIGKILL, rescan. Exit 1 with the survivors' PIDs when any target is left: the caller treats the worktree as tainted.
-    import signal; wt, me = os.path.realpath(a[1]), a[2]; keep = set(); p = me; gp = os.path.join(wt, ".git")
-    can = lambda pid, path: sc(int(pid), b"file-write-data", 1 | 0x40000000, path.encode()) == 0
+    import signal; wt, me = os.path.realpath(a[1]), a[2]; keep = set(); p = me
     while p and p not in keep and p != "0":
         keep.add(p); r = subprocess.run(["ps", "-o", "ppid=", "-p", p], capture_output=True, text=True); p = r.stdout.strip()
     def targets():
@@ -116,8 +118,6 @@ if cmd in ("pids", "reap"):
         for l in r.stdout.splitlines():
             if l.startswith("p"): pid = l[1:]
             elif l.startswith("n") and pid and pid not in keep and (l[1:] == wt or l[1:].startswith(wt + "/")): out.add(pid)
-        for q in subprocess.run(["ps", "-U", str(os.getuid()), "-o", "pid="], capture_output=True, text=True).stdout.split():
-            if q not in keep and os.path.lexists(gp) and can(q, wt) and not can(q, gp): out.add(q)
         return out
     def sig(qs, s):
         for q in qs:
@@ -136,8 +136,8 @@ if cmd in ("pids", "reap"):
     if left or capped: print(" ".join(sorted(left)) or "pass cap"); sys.exit(1)
     sys.exit()
 if cmd == "final":
-    # final EVID WT PF TAG STEP ROUND PS TIER ROUTE MODEL EFFORT SID IN OUT COST FORCED: AC13 outcome checks; logs the row, prints status and reason.
-    ev, wt, pf, tag, step, rnd, ps, tier, route, model, effort, sid, tin, tout, cost, forced = a[1:17]
+    # final EVID WT PF TAG STEP ROUND PS TIER ROUTE MODEL EFFORT SID IN OUT COST FORCED BASE: AC13 outcome checks; logs the row, prints status and reason.
+    ev, wt, pf, tag, step, rnd, ps, tier, route, model, effort, sid, tin, tout, cost, forced, base = a[1:18]
     git = lambda *x: subprocess.run(("git", "-C", wt) + x, capture_output=True).stdout.decode("utf-8", "surrogateescape")
     allow = [f[2:] if f.startswith("./") else f for f in (str(x) for x in plan(pf).get("files") or [])]
     def okp(p):
@@ -154,6 +154,7 @@ if cmd == "final":
     imp = os.path.join(wt, ".impl"); rp, ep = os.path.join(imp, "result.json"), os.path.join(imp, "escalation.md"); res = None
     reg = lambda f: stat.S_ISREG(os.lstat(f).st_mode) if os.path.lexists(f) else None
     why = "" if forced == "-" else forced
+    if not why and git("rev-parse", "HEAD").strip() != base: why = "HEAD moved: the implementer changed git history"
     if not why and (os.path.islink(imp) or not os.path.isdir(imp) or reg(rp) is False or reg(ep) is False): why = ".impl is not a real dir, or result.json/escalation.md is not a regular file"
     if not why:
         try: res = json.load(open(rp)) if reg(rp) else None

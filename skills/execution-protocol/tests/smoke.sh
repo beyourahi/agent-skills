@@ -86,12 +86,11 @@ chk "implement_lib.py compiles" bash -c "cp '$ROOT/scripts/implement_lib.py' '$T
 chk "no raw claude command + no DeepSeek Low review" bash -c "! grep -q 'claude -p --model' '$ROOT/SKILL.md' && ! grep -qE 'read-only DeepSeek session|sent alone' '$ROOT/SKILL.md' && grep -qF '| Low | \`review\` | Opus, \`--effort medium\` |' '$ROOT/SKILL.md' && ! grep -qE -- '--agent plan|deepseek-low' '$ROOT/scripts/gate.sh'"
 chk "brief optional + op record + size" bash -c "grep -qi optional '$ROOT/opus-gate-brief.md' && grep -q 'op-<name>.md' '$ROOT/SKILL.md' && [ \$(wc -c < '$ROOT/SKILL.md') -le 24000 ]"
 chk "no DeepSeek route or fallback" bash -c "! grep -qE 'opencode run|deepseek|OPENCODE_CONFIG|GATE_NO_FALLBACK' '$ROOT/scripts/gate.sh' && test ! -e '$ROOT/opencode-gate.json' && ! grep -q DeepSeek '$ROOT/opus-gate-brief.md' && ! grep -qE 'Opus fallback|Outer loop' '$ROOT/SKILL.md' && grep -qF 'opencode-go/deepseek-v4.1-flash#high' '$ROOT/SKILL.md' && grep -qF claude-sonnet-5-5 '$ROOT/SKILL.md' && grep -qF scripts/implement.sh '$ROOT/SKILL.md'"
-chk "exit 6 documented, no overstated reaper claim" bash -c "bash '$ROOT/scripts/implement.sh' --help | grep -q '6 confined processes survived' && grep -q 'Exit 6' '$ROOT/SKILL.md' && ! grep -q 'stops every process confined' '$ROOT/SKILL.md' && ! grep -q 'wherever it moved' '$ROOT/SKILL.md'"
+chk "exit 6 documented, no overstated reaper claim" bash -c "bash '$ROOT/scripts/implement.sh' --help | grep -q '6 worktree processes survived' && grep -q 'Exit 6' '$ROOT/SKILL.md' && ! grep -q 'stops every process confined' '$ROOT/SKILL.md' && ! grep -q 'wherever it moved' '$ROOT/SKILL.md'"
 chk "Sonnet fallback High only in SKILL.md" bash -c "grep -qF '| Sonnet 5.5: \`claude-sonnet-5-5\`, High only |' '$ROOT/SKILL.md' && ! grep -qE 'Medium or High \||otherwise medium' '$ROOT/SKILL.md'"
 chk "description 450 max" bash -c "d=\$(awk -F\"'\" '/^description:/{print \$2; exit}' '$ROOT/SKILL.md'); [ -n \"\$d\" ] && [ \${#d} -le 450 ]"
 # --- superpowers-review changes (sp-apply-1114) ---
 cat > "$T/inline.txt" <<'KEEP'
-run no command-accepting local service during a round
 never resume a gate session
 malformed command is fixed and rerun, never unavailability
 A `fail` verdict is a valid run
@@ -108,7 +107,9 @@ if [ -f "$ROOT/../review-loop/SKILL.md" ]; then
 else
   printf 'ok   %s\n' "review-loop defers to protocol routing (skipped: review-loop not installed)"
 fi
-chk "reference.md holds internals" bash -c "r='$ROOT/reference.md'; test -f \"\$r\" && grep -qF modelUsage \"\$r\" && grep -qF -- --match-head-commit \"\$r\" && grep -qF sandbox-exec \"\$r\" && grep -qF 'Gate eval set' \"\$r\" && grep -qF reference.md '$ROOT/SKILL.md' && ! grep -qF 'is deprecated (a failure makes DeepSeek unavailable' '$ROOT/SKILL.md'"
+chk "reference.md holds internals" bash -c "r='$ROOT/reference.md'; test -f \"\$r\" && grep -qF modelUsage \"\$r\" && grep -qF -- --match-head-commit \"\$r\" && grep -qF 'no sandbox (Rahi 2026-11-14)' \"\$r\" && grep -qF 'Gate eval set' \"\$r\" && grep -qF reference.md '$ROOT/SKILL.md' && ! grep -qF 'is deprecated (a failure makes DeepSeek unavailable' '$ROOT/SKILL.md'"
+SBXPAT='sandbox-exec|implementer\.sb|sandbox_check|IMPL_SANDBOX|IMPL-SANDBOX|failIfUnavailable|"sandbox"'
+chk "no sandbox left" bash -c "test ! -e '$ROOT/scripts/implementer.sb' && ! grep -rqE \"\$1\" '$ROOT/scripts' '$ROOT/opencode' '$ROOT/SKILL.md' '$ROOT/reference.md' '$ROOT/implementer-brief.md' && grep -qF '**No sandbox (Rahi 2026-11-14):**' '$ROOT/SKILL.md'" _ "$SBXPAT"
 chk "plan risks and RED in SKILL" bash -c "grep -qF '## Plan risks' '$ROOT/SKILL.md' && grep -qF 'RED confirmed:' '$ROOT/SKILL.md'"
 chk "SKILL size 23300 max" bash -c "[ \$(wc -c < '$ROOT/SKILL.md') -le 23300 ]"
 # --- consolidation: cswap mechanics in reference.md, lane ceiling and source-repo rule in SKILL.md ---
